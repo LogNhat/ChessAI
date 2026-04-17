@@ -8,13 +8,13 @@ from torch.utils.tensorboard import SummaryWriter
 from env.dataset import get_dataloader
 from model.alphazero_net import AlphaZeroNet
 
-def train(data_dir='dataset/train_data', epochs=3, batch_size=4096, lr=0.001, num_workers=4):
+def train(data_dir='dataset/train_data', epochs=5, batch_size=4096, lr=0.001, num_workers=4, max_positions=20_000_000):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Bắt đầu huấn luyện trên thiết bị: {device} (Tesla M40 Optimized)")
-    print(f"Batch size: {batch_size}, Learning Rate: {lr}, Num Workers: {num_workers}, Epochs: {epochs}")
+    print(f"Batch size: {batch_size}, Learning Rate: {lr}, Num Workers: {num_workers}, Epochs: {epochs}, Max Positions: {max_positions}")
     
-    # 1. Khởi tạo Model (10 blocks, 192 filters phù hợp cho thời hạn 3 ngày)
-    model = AlphaZeroNet(num_blocks=10, num_channels=192).to(device)
+    # 1. Khởi tạo Model (6 blocks, 128 filters phù hợp cho dữ liệu 20M)
+    model = AlphaZeroNet(num_blocks=6, num_channels=128).to(device)
     
     ckpt_path = 'checkpoints/best_model.pth'
     start_epoch = 0
@@ -34,7 +34,7 @@ def train(data_dir='dataset/train_data', epochs=3, batch_size=4096, lr=0.001, nu
     # Loại bỏ hoàn toàn AMP/Mixed Precision vì Maxwell M40 không có Tensor Cores hữu ích cho FP16
     
     # 3. Dataloader
-    dataloader = get_dataloader(data_dir, batch_size, num_workers=num_workers)
+    dataloader = get_dataloader(data_dir, batch_size, num_workers=num_workers, max_positions=max_positions)
     
     writer = SummaryWriter('runs/chess_sl_m40')
     
@@ -116,5 +116,5 @@ def train(data_dir='dataset/train_data', epochs=3, batch_size=4096, lr=0.001, nu
     print("Huấn luyện thành công!")
 
 if __name__ == "__main__":
-    # Batch size 4096 fits comfortably in 24GB VRAM for a 10-block 192-filter ResNet
-    train(epochs=3, batch_size=4096, num_workers=0)
+    # Batch size 4096 fits comfortably in 24GB VRAM for a 6-block 128-filter ResNet
+    train(epochs=5, batch_size=4096, num_workers=0)

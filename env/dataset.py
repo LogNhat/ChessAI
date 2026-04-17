@@ -10,7 +10,7 @@ class ChessDataset(Dataset):
     """
     Standard PyTorch Dataset for reading preprocessed HDF5 files.
     """
-    def __init__(self, data_dir: str, max_files: int = None):
+    def __init__(self, data_dir: str, max_files: int = None, max_positions: int = None):
         """
         data_dir: Path to the directory containing .h5 files
         """
@@ -28,10 +28,15 @@ class ChessDataset(Dataset):
         
         print(f"Indexing {len(self.h5_files)} HDF5 files. This may take a moment...")
         for f in self.h5_files:
+            if max_positions is not None and self.total_size >= max_positions:
+                break
+                
             try:
                 with h5py.File(f, 'r') as h5f:
                     if 'fen' in h5f:
                         size = len(h5f['fen'])
+                        if max_positions is not None and self.total_size + size > max_positions:
+                            size = max_positions - self.total_size
                         self.file_sizes.append(size)
                         self.total_size += size
                         self.cumulative_sizes.append(self.total_size)
@@ -90,8 +95,8 @@ class ChessDataset(Dataset):
         if self.current_h5 is not None:
             self.current_h5.close()
 
-def get_dataloader(data_dir: str, batch_size: int, num_workers: int = 4, max_files: int = None):
-    dataset = ChessDataset(data_dir, max_files)
+def get_dataloader(data_dir: str, batch_size: int, num_workers: int = 4, max_files: int = None, max_positions: int = None):
+    dataset = ChessDataset(data_dir, max_files, max_positions)
     # Important: num_workers > 0 causes issues with h5py handles if not handled properly.
     # We open on the fly, but h5py doesn't like fork. worker_init_fn could help.
     loader = DataLoader(
