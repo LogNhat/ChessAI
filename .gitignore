@@ -1,0 +1,26 @@
+# Virtual Environments
+venv/
+env/bin/
+env/include/
+env/lib/
+env/lib64/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# IDEs
+.idea/
+.vscode/
+
+# Datasets and Checkpoints
+*.h5
+*.pgn
+dataset/data_2700/
+dataset/train_data/
+checkpoints/
+runs/
+*.pth
+
+# MacOS/Linux
+.DS_Store
