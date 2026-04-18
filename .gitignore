@@ -13,14 +13,17 @@ __pycache__/
 .idea/
 .vscode/
 
-# Datasets and Checkpoints
-*.h5
+# Datasets and Checkpoints (large raw data — not tracked)
 *.pgn
 dataset/data_2700/
 dataset/train_data/
 checkpoints/
 runs/
 *.pth
+
+# HDF5 files: track train_top_6m via Git LFS, ignore everything else
+*.h5
+!dataset/train_top_6m/*.h5
 
 # MacOS/Linux
 .DS_Store

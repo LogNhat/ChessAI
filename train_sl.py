@@ -8,42 +8,80 @@ from torch.utils.tensorboard import SummaryWriter
 from env.dataset import get_dataloader
 from model.alphazero_net import AlphaZeroNet
 
-def train(data_dir='dataset/train_data', epochs=45, batch_size=4096, num_workers=4, limit_positions=20_000_000):
+def train(data_dir='dataset/train_top_6m', epochs=20, batch_size=4096, num_workers=4, limit_positions=6_000_000):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Bắt đầu huấn luyện quá trình 3 Phases trên thiết bị: {device} (Tesla M40 Optimized)")
+    print(f"Bắt đầu Finetuning (tiếp tục học) trên thiết bị: {device} (Tesla M40 Optimized)")
     print(f"Batch size: {batch_size}, Max Data: {limit_positions} positions")
-    print(f"Num Workers: {num_workers}, Total Epochs: {epochs}")
+    print(f"Num Workers: {num_workers}, Total Finetune Epochs: {epochs}")
     
-    # 1. Khởi tạo Model (10 blocks, 192 filters phù hợp cho thời hạn 3 ngày)
-    model = AlphaZeroNet(num_blocks=10, num_channels=192).to(device)
+    # 1. Khởi tạo Model mới: 12 SE-ResBlocks, 192 filters
+    # (tăng từ 10 lên 12, tích hợp SE Attention)
+    model = AlphaZeroNet(num_blocks=12, num_channels=192).to(device)
     
     # 2. Losses và Optimizer
     policy_criterion = nn.CrossEntropyLoss()
     value_criterion = nn.MSELoss()
     
-    # Initial learning rate for Phase 1
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    # Initial learning rate cho Finetuning Phase: nhỏ hơn để không phá vỡ weights đã học
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
     
-    # Phase Scheduler: 
-    # Phase 1: epochs 0 -> 14 (lr=1e-3)
-    # Phase 2: epochs 15 -> 29 (lr=1e-4)
-    # Phase 3: epochs 30 -> 44 (lr=1e-5)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[15, 30], gamma=0.1)
+    # CosineAnnealingLR: giảm LR mượt mà từ 1e-4 → eta_min=1e-7 qua 20 epochs
+    # Phù hợp hơn MultiStepLR cho finetuning vì không bị nhảy cứng
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-7)
     
-    ckpt_path = 'checkpoints/best_model.pth'
+    # Lưu checkpoint finetuned riêng để không ghi đè model gốc
+    ckpt_path     = 'checkpoints/finetuned_best.pth'
+    # Checkpoint của model cũ (10 block, không SE) — dùng để transfer weights
+    pretrain_path = 'checkpoints/best_model.pth'
     start_epoch = 0
-    best_loss = float('inf')
-    
+    best_loss   = float('inf')
+
+    # ── Ưu tiên 1: Load checkpoint finetuned (nếu đang resume finetuning) ──────
     if os.path.exists(ckpt_path):
-        print(f"Đang tải Checkpoint từ {ckpt_path}...")
+        print(f"[RESUME] Tìm thấy finetuned checkpoint, đang tải {ckpt_path}...")
         checkpoint = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         if 'scheduler_state_dict' in checkpoint:
             scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
-        best_loss = checkpoint.get('loss', float('inf'))
-        print(f"Tải thành công! Resume từ epoch {start_epoch} (Best Loss: {best_loss:.4f})")
+        best_loss   = checkpoint.get('loss', float('inf'))
+        print(f"[RESUME] Resume finetune từ epoch {start_epoch} (Best Loss: {best_loss:.4f})")
+
+    # ── Ưu tiên 2: Transfer từ checkpoint cũ (khác architecture) ───────────────
+    elif os.path.exists(pretrain_path):
+        print(f"[TRANSFER] Tải pretrained weights từ {pretrain_path}...")
+        checkpoint   = torch.load(pretrain_path, map_location=device)
+        old_sd       = checkpoint['model_state_dict']
+        new_sd       = model.state_dict()
+
+        transferred, skipped_shape, skipped_missing = [], [], []
+
+        for name, param in new_sd.items():
+            if name in old_sd:
+                if old_sd[name].shape == param.shape:
+                    new_sd[name] = old_sd[name]          # ✅ khớp tên + shape
+                    transferred.append(name)
+                else:
+                    skipped_shape.append(
+                        f"  {name}: old {tuple(old_sd[name].shape)} != new {tuple(param.shape)}"
+                    )
+            else:
+                skipped_missing.append(f"  {name}")      # layer mới hoàn toàn
+
+        model.load_state_dict(new_sd)
+
+        print(f"[TRANSFER] Transferred {len(transferred)} layers thành công.")
+        if skipped_shape:
+            print(f"[TRANSFER] Bỏ qua {len(skipped_shape)} layer lệch shape (giữ random init):")
+            for s in skipped_shape:
+                print(s)
+        if skipped_missing:
+            print(f"[TRANSFER] {len(skipped_missing)} layer mới hoàn toàn (giữ random init):")
+            for s in skipped_missing:
+                print(s)
+        print("[TRANSFER] Bắt đầu finetune 20 epochs với SE-ResNet 12 blocks...")
+
 
     # Loại bỏ hoàn toàn AMP/Mixed Precision vì Maxwell M40 không có Tensor Cores hữu ích cho FP16
     
@@ -86,9 +124,11 @@ def train(data_dir='dataset/train_data', epochs=45, batch_size=4096, num_workers
             loss_v = value_criterion(value_out, values)
             loss = loss_p + loss_v
             
-            # Backward and optimize (FP32)
+            # Backward và optimize (FP32)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            # Gradient clipping: tránh exploding gradients trong giai đoạn finetuning
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
             total_p_loss += loss_p.item()
@@ -107,9 +147,10 @@ def train(data_dir='dataset/train_data', epochs=45, batch_size=4096, num_workers
                 }, f'checkpoints/model_ep{epoch+1}_batch{batch_idx}.pth')
 
             if batch_idx % 50 == 0:
+                current_lr_log = scheduler.get_last_lr()[0]
                 print(f"Epoch {epoch+1}/{epochs} | Batch {batch_idx}/{len(dataloader)} | "
                       f"P_Loss: {loss_p.item():.4f} | V_Loss: {loss_v.item():.4f} | "
-                      f"Total: {loss.item():.4f}")
+                      f"Total: {loss.item():.4f} | LR: {current_lr_log:.2e}")
                 
         # Cuối epoch
         avg_loss = total_loss / len(dataloader)
@@ -123,7 +164,7 @@ def train(data_dir='dataset/train_data', epochs=45, batch_size=4096, num_workers
         writer.add_scalar('Loss/Total', avg_loss, epoch)
         writer.add_scalar('Loss/Policy', avg_p_loss, epoch)
         writer.add_scalar('Loss/Value', avg_v_loss, epoch)
-        writer.add_scalar('LR', current_lr, epoch)
+        writer.add_scalar('LR', scheduler.get_last_lr()[0], epoch)
         
         # Cập nhật scheduler cuối mỗi epoch
         scheduler.step()
@@ -131,13 +172,15 @@ def train(data_dir='dataset/train_data', epochs=45, batch_size=4096, num_workers
         # Save best checkpoint
         if avg_loss < best_loss:
             best_loss = avg_loss
-            print("=> Mức loss tốt nhất, đang lưu Checkpoint...")
+            print("=> Mức loss tốt nhất, đang lưu Finetuned Checkpoint...")
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
                 'loss': best_loss,
+                'num_blocks': 12,
+                'num_channels': 192,
             }, ckpt_path)
             
         torch.save({
@@ -149,9 +192,10 @@ def train(data_dir='dataset/train_data', epochs=45, batch_size=4096, num_workers
         }, f'checkpoints/model_ep{epoch+1}.pth')
         
     writer.close()
-    print("Huấn luyện thành công toàn bộ 3 Phases!")
+    print("Finetuning 20 epochs hoàn thành! Checkpoint tốt nhất: checkpoints/finetuned_best.pth")
 
 if __name__ == "__main__":
-    # Batch size 4096 fits comfortably in 24GB VRAM.
-    # Total epochs 45 separated into 3 phases by MultiStepLR.
-    train(epochs=45, batch_size=4096, num_workers=0, limit_positions=20_000_000)
+    # SE-ResNet 12 blocks, 192 filters.
+    # Finetuning 20 epochs trên 6M nước đi chất lượng cao nhất (Elo >= 2985).
+    # CosineAnnealingLR: lr từ 1e-4 → 1e-7
+    train(epochs=20, batch_size=4096, num_workers=0, limit_positions=6_000_000)
