@@ -1590,13 +1590,26 @@
         aiModel = DEFAULT_MODEL_KEY;
 
         /* 3. Populate all three <select> dropdowns */
-        const mkOptions = (selectedKey) =>
-          ALL_MODELS.map(m => {
-            const archTag = m.arch_type === 'se' ? '✦ SE' : 'V1';
-            const label   = `${m.display}  [ep${m.epoch} loss${m.loss.toFixed(3)}]`;
-            const sel     = m.key === selectedKey ? ' selected' : '';
-            return `<option value="${m.key}"${sel}>${archTag}  ${label}</option>`;
-          }).join('');
+        const grouped = ALL_MODELS.reduce((acc, m) => {
+          (acc[m.category] = acc[m.category] || []).push(m);
+          return acc;
+        }, {});
+
+        const mkOptions = (selectedKey) => {
+          let html = '';
+          for (const [cat, models] of Object.entries(grouped)) {
+            html += `<optgroup label="${cat}">`;
+            // Sort to ensure chronological display
+            models.sort((a,b) => a.epoch !== b.epoch ? a.epoch - b.epoch : a.loss - b.loss).forEach(m => {
+              const archTag = m.arch_type === 'se' ? '✦ SE' : 'V1';
+              const label   = `${m.display}  [ep${m.epoch} loss${m.loss.toFixed(3)}]`;
+              const sel     = m.key === selectedKey ? ' selected' : '';
+              html += `<option value="${m.key}"${sel}>${archTag}  ${label}</option>`;
+            });
+            html += `</optgroup>`;
+          }
+          return html;
+        };
 
         $('#ai-model-select').html(mkOptions(DEFAULT_MODEL_KEY));
         $('#aiai-model-white').html(mkOptions(DEFAULT_MODEL_KEY));
@@ -1607,15 +1620,19 @@
         aiaiModelBlack = DEFAULT_MODEL_KEY;
 
         /* 4. Populate model info card */
-        const listHtml = ALL_MODELS.map(m => {
-          const archCls  = m.arch_type === 'se' ? 'model-info-arch-se' : 'model-info-arch-v1';
-          const archIcon = m.arch_type === 'se' ? '✦' : '■';
-          return `
-            <div class="model-info-row">
-              <div class="model-info-name">${m.display}</div>
-              <div class="model-info-meta ${archCls}">${archIcon} ${m.arch}</div>
-              <div class="model-info-meta">ep ${m.epoch} · loss <span style="color:var(--yellow)">${m.loss.toFixed(4)}</span> · ${m.filename}</div>
-            </div>`;
+        const listHtml = Object.entries(grouped).map(([cat, models]) => {
+          let html = `<div style="font-size:0.65rem; font-weight:800; color:var(--text-3); text-transform:uppercase; margin:10px 0 4px; padding-left:2px; letter-spacing: 0.05em;">${cat}</div>`;
+          models.sort((a,b) => a.epoch !== b.epoch ? a.epoch - b.epoch : a.loss - b.loss).forEach(m => {
+            const archCls  = m.arch_type === 'se' ? 'model-info-arch-se' : 'model-info-arch-v1';
+            const archIcon = m.arch_type === 'se' ? '✦' : '■';
+            html += `
+              <div class="model-info-row">
+                <div class="model-info-name">${m.display}</div>
+                <div class="model-info-meta ${archCls}">${archIcon} ${m.arch}</div>
+                <div class="model-info-meta">ep ${m.epoch} · loss <span style="color:var(--yellow)">${m.loss.toFixed(4)}</span> · ${m.filename}</div>
+              </div>`;
+          });
+          return html;
         }).join('');
         $('#model-list').html(listHtml);
 
