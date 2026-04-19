@@ -1,0 +1,1839 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chess AI — Dual Model (V1 + Finetuned SE-ResNet)</title>
+  <meta name="description" content="Chơi cờ vua với AI SE-ResNet được finetune trên 6M nước đi elite grandmaster 2985+ Elo." />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Fira+Mono:wght@400;500&display=swap"
+    rel="stylesheet" />
+
+  <!-- Chess libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css" />
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js"></script>
+
+  <style>
+    /* ───── Design Tokens ───── */
+    :root {
+      --bg-deep: #0a0b10;
+      --bg-panel: #10121a;
+      --bg-card: #161924;
+      --bg-hover: #1e2232;
+      --border: #252a3a;
+      --border-glow: #4f6ef7;
+      --accent: #4f6ef7;
+      --accent2: #9b5cf7;
+      --accent3: #22d3ee;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+      --text-1: #f1f5f9;
+      --text-2: #94a3b8;
+      --text-3: #64748b;
+      --board-light: #e8d5b7;
+      --board-dark: #b5835a;
+      --highlight: rgba(79, 110, 247, 0.45);
+      --hint: rgba(34, 211, 238, 0.3);
+      --radius: 12px;
+      --radius-lg: 20px;
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+      --shadow-glow: 0 0 40px rgba(79, 110, 247, 0.15);
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      height: 100%;
+      background: var(--bg-deep);
+      color: var(--text-1);
+      font-family: 'Inter', sans-serif;
+      overflow-x: hidden;
+    }
+
+    /* ── Background mesh gradient ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 20% -10%, rgba(79, 110, 247, 0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 50% at 80% 110%, rgba(155, 92, 247, 0.10) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    /* ── Grid stars ── */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background-image: radial-gradient(circle, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+      background-size: 30px 30px;
+      pointer-events: none;
+    }
+
+    /* ───── Layout ───── */
+    #app {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100vh;
+      padding: 0 16px;
+    }
+
+    /* ───── Header ───── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 38px;
+      height: 38px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      box-shadow: 0 0 20px rgba(79, 110, 247, 0.4);
+    }
+
+    .logo-text {
+      font-size: 1.2rem;
+      font-weight: 800;
+    }
+
+    .logo-sub {
+      font-size: 0.7rem;
+      color: var(--text-3);
+      font-weight: 400;
+      margin-top: 1px;
+    }
+
+    #status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      color: var(--text-2);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 50px;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.4;
+      }
+    }
+
+    /* ───── Main Content ───── */
+    main {
+      display: flex;
+      gap: 24px;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 28px 0;
+      flex-wrap: wrap;
+    }
+
+    /* ───── Left Panel ───── */
+    .panel-left {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      width: 220px;
+      min-width: 200px;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      transition: border-color 0.2s;
+    }
+
+    .card:hover {
+      border-color: #2d3450;
+    }
+
+    .card-title {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-3);
+      margin-bottom: 12px;
+    }
+
+    /* ── Mode tabs ── */
+    .mode-tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+
+    .mode-tab {
+      flex: 1;
+      padding: 9px 0;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+      text-align: center;
+      border: 1.5px solid var(--border);
+      color: var(--text-3);
+      background: var(--bg-hover);
+      transition: all 0.18s;
+      user-select: none;
+    }
+
+    .mode-tab:hover {
+      border-color: var(--accent);
+      color: var(--text-2);
+    }
+
+    .mode-tab.active {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-color: transparent;
+      color: #fff;
+      box-shadow: 0 0 18px rgba(79, 110, 247, 0.4);
+    }
+
+    /* 2P player name inputs */
+    .pvp-names {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 2px;
+    }
+
+    .pvp-name-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pvp-name-icon {
+      font-size: 1.1rem;
+    }
+
+    .pvp-name-input {
+      flex: 1;
+      background: var(--bg-hover);
+      border: 1.5px solid var(--border);
+      border-radius: 7px;
+      padding: 7px 10px;
+      font-size: 0.78rem;
+      color: var(--text-1);
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .pvp-name-input:focus {
+      border-color: var(--accent);
+    }
+
+    .pvp-name-input::placeholder {
+      color: var(--text-3);
+    }
+
+    /* Difficulty selector */
+    .diff-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .diff-btn {
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 6px;
+      color: var(--text-2);
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+    }
+
+    .diff-btn:hover {
+      border-color: var(--accent);
+      color: var(--text-1);
+    }
+
+    .diff-btn.active {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-color: transparent;
+      color: #fff;
+      box-shadow: 0 0 16px rgba(79, 110, 247, 0.4);
+    }
+
+    /* 2P turn banner under board */
+    #pvp-banner {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 20px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 50px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-1);
+      animation: bannerBounce 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    #pvp-banner.show {
+      display: flex;
+    }
+
+    @keyframes bannerBounce {
+      from {
+        opacity: 0;
+        transform: scale(0.88);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    .pvp-crown {
+      font-size: 1.1rem;
+    }
+
+    /* AI vs AI speed selector */
+    .speed-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+    }
+
+    .speed-btn {
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 4px;
+      color: var(--text-2);
+      font-size: 0.73rem;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.15s;
+    }
+
+    .speed-btn:hover {
+      border-color: var(--accent3);
+      color: var(--text-1);
+    }
+
+    .speed-btn.active {
+      background: linear-gradient(135deg, #0e7490, #0d9488);
+      border-color: transparent;
+      color: #fff;
+      box-shadow: 0 0 14px rgba(34, 211, 238, 0.35);
+    }
+
+    /* AI duel live banner */
+    #aiai-banner {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 20px;
+      background: linear-gradient(90deg, rgba(79, 110, 247, 0.12), rgba(34, 211, 238, 0.12));
+      border: 1px solid rgba(34, 211, 238, 0.3);
+      border-radius: 50px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-1);
+      animation: bannerBounce 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    #aiai-banner.show {
+      display: flex;
+    }
+
+    .aiai-pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent3);
+      box-shadow: 0 0 8px var(--accent3);
+      animation: pulse 1s infinite;
+    }
+
+    /* Start/Stop button */
+    #btn-aiai-toggle {
+      width: 100%;
+      padding: 11px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+      background: linear-gradient(135deg, #0e7490, #0d9488);
+      color: #fff;
+      box-shadow: 0 0 18px rgba(34, 211, 238, 0.3);
+      transition: all 0.15s;
+      margin-top: 10px;
+    }
+
+    #btn-aiai-toggle:hover {
+      opacity: 0.88;
+      transform: translateY(-1px);
+    }
+
+    #btn-aiai-toggle.running {
+      background: linear-gradient(135deg, #7f1d1d, #991b1b);
+      box-shadow: 0 0 18px rgba(239, 68, 68, 0.35);
+    }
+
+    /* Color selector */
+    .color-btns {
+      display: flex;
+      gap: 8px;
+    }
+
+    .color-btn {
+      flex: 1;
+      padding: 9px 0;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1.5px solid var(--border);
+      transition: all 0.15s;
+      text-align: center;
+    }
+
+    #btn-white {
+      background: rgba(255, 255, 255, 0.08);
+      color: #ffe;
+    }
+
+    #btn-black {
+      background: rgba(0, 0, 0, 0.4);
+      color: #aaa;
+    }
+
+    #btn-white.active,
+    #btn-black.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 12px rgba(79, 110, 247, 0.3);
+    }
+
+    /* Action buttons */
+    .action-btn {
+      width: 100%;
+      padding: 11px;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: none;
+    }
+
+    #btn-new-game {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #fff;
+      box-shadow: 0 0 20px rgba(79, 110, 247, 0.35);
+    }
+
+    #btn-new-game:hover {
+      opacity: 0.88;
+      transform: translateY(-1px);
+    }
+
+    #btn-undo {
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      color: var(--text-2);
+    }
+
+    #btn-undo:hover {
+      border-color: var(--yellow);
+      color: var(--yellow);
+    }
+
+    /* Eval bar */
+    .eval-bar-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .eval-bar-track {
+      flex: 1;
+      height: 8px;
+      background: var(--bg-hover);
+      border-radius: 50px;
+      overflow: hidden;
+    }
+
+    .eval-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent3));
+      border-radius: 50px;
+      transition: width 0.5s ease;
+      width: 50%;
+    }
+
+    .eval-score {
+      font-family: 'Fira Mono', monospace;
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--accent3);
+      min-width: 36px;
+      text-align: right;
+    }
+
+    .eval-label {
+      font-size: 0.68rem;
+      color: var(--text-3);
+      margin-top: 6px;
+    }
+
+    /* ───── Board area ───── */
+    .board-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #board-container {
+      position: relative;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: var(--shadow), var(--shadow-glow);
+      border: 2px solid var(--border);
+    }
+
+    /* Override chessboard.js piece squares for custom highlight */
+    .highlight-from {
+      box-shadow: inset 0 0 0 3px rgba(240, 210, 0, 0.85) !important;
+    }
+
+    .highlight-to {
+      box-shadow: inset 0 0 0 3px rgba(79, 110, 247, 0.85) !important;
+    }
+
+    .board-coords {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.68rem;
+      color: var(--text-3);
+      width: 100%;
+      padding: 0 4px;
+    }
+
+    /* Turn indicator */
+    .turn-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 50px;
+      font-size: 0.78rem;
+      color: var(--text-2);
+    }
+
+    .turn-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      transition: background 0.3s;
+    }
+
+    .turn-dot.white {
+      background: #f8f8f8;
+      box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
+    }
+
+    .turn-dot.black {
+      background: #1e2232;
+      border: 2px solid #64748b;
+    }
+
+    /* AI thinking spinner */
+    #ai-thinking {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.78rem;
+      color: var(--accent3);
+    }
+
+    #ai-thinking.show {
+      display: flex;
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(34, 211, 238, 0.25);
+      border-top-color: var(--accent3);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* ───── Right Panel ───── */
+    .panel-right {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      width: 240px;
+      min-width: 220px;
+    }
+
+    /* Move history */
+    #move-list {
+      max-height: 220px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+      display: grid;
+      grid-template-columns: 28px 1fr 1fr;
+      gap: 2px 6px;
+      align-content: start;
+    }
+
+    .move-num {
+      color: var(--text-3);
+      font-size: 0.73rem;
+      padding: 3px 0;
+      text-align: right;
+    }
+
+    .move-cell {
+      font-family: 'Fira Mono', monospace;
+      font-size: 0.73rem;
+      color: var(--text-2);
+      padding: 3px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+
+    .move-cell:hover {
+      background: var(--bg-hover);
+      color: var(--text-1);
+    }
+
+    .move-cell.latest {
+      color: var(--accent3);
+    }
+
+    /* Top moves */
+    #top-moves-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .top-move-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+    }
+
+    .top-move-uci {
+      font-family: 'Fira Mono', monospace;
+      color: var(--accent3);
+      width: 52px;
+    }
+
+    .top-move-bar-wrap {
+      flex: 1;
+      height: 5px;
+      background: var(--bg-hover);
+      border-radius: 50px;
+      overflow: hidden;
+    }
+
+    .top-move-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 50px;
+    }
+
+    .top-move-pct {
+      color: var(--text-3);
+      font-size: 0.68rem;
+      min-width: 38px;
+      text-align: right;
+    }
+
+    /* Game result overlay */
+    #result-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(10, 11, 16, 0.82);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+      border-radius: 14px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    #result-overlay.show {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    .result-emoji {
+      font-size: 3.5rem;
+    }
+
+    .result-text {
+      font-size: 1.5rem;
+      font-weight: 800;
+    }
+
+    .result-sub {
+      font-size: 0.85rem;
+      color: var(--text-2);
+    }
+
+    .result-play-again {
+      margin-top: 8px;
+      padding: 12px 28px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 0 24px rgba(79, 110, 247, 0.4);
+      transition: 0.15s;
+    }
+
+    .result-play-again:hover {
+      transform: translateY(-2px);
+      opacity: 0.9;
+    }
+
+    /* Model info chip */
+    .model-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: linear-gradient(135deg, rgba(79, 110, 247, 0.12), rgba(155, 92, 247, 0.12));
+      border: 1px solid rgba(79, 110, 247, 0.25);
+      border-radius: 50px;
+      padding: 5px 12px;
+      font-size: 0.68rem;
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    /* ── Model selector dropdown ── */
+    .model-label {
+      font-size: 0.62rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-3);
+      margin-top: 10px;
+      margin-bottom: 4px;
+    }
+
+    .model-select {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: var(--bg-hover);
+      border: 1.5px solid var(--border);
+      color: var(--text-1);
+      font-size: 0.75rem;
+      font-family: 'Inter', sans-serif;
+      cursor: pointer;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748b'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .model-select:focus, .model-select:hover {
+      border-color: var(--accent2);
+      box-shadow: 0 0 0 2px rgba(155,92,247,0.18);
+    }
+
+    .model-select option {
+      background: #1e2232;
+      color: var(--text-1);
+    }
+
+    /* Model info list in card */
+    .model-info-row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 7px 9px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-hover);
+      margin-bottom: 5px;
+      transition: border-color 0.18s;
+    }
+
+    .model-info-row:hover { border-color: #2d3450; }
+
+    .model-info-name {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--text-1);
+    }
+
+    .model-info-arch-se  { color: var(--accent2); }
+    .model-info-arch-v1  { color: var(--accent3); }
+
+    .model-info-meta {
+      font-size: 0.65rem;
+      color: var(--text-3);
+      font-family: 'Fira Mono', monospace;
+    }
+
+    /* ───── Footer ───── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 14px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.7rem;
+      color: var(--text-3);
+    }
+
+    /* ───── Toast ───── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9999;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-size: 0.8rem;
+      color: var(--text-1);
+      box-shadow: var(--shadow);
+      transform: translateY(80px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    #toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    /* ───── Responsive adjustments ───── */
+    @media (max-width: 860px) {
+      main {
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .panel-left,
+      .panel-right {
+        width: 100%;
+        max-width: 500px;
+        flex-direction: row;
+        flex-wrap: wrap;
+      }
+
+      .panel-left .card,
+      .panel-right .card {
+        flex: 1;
+        min-width: 180px;
+      }
+    }
+
+    /* Chessboard custom squares */
+    .white-1e1d7 {
+      background-color: var(--board-light) !important;
+    }
+
+    .black-3c85d {
+      background-color: var(--board-dark) !important;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+
+    <!-- ── Header ── -->
+    <header>
+      <div class="logo">
+        <div class="logo-icon">♛</div>
+        <div>
+          <div class="logo-text">Chess AI</div>
+          <div class="logo-sub" id="logo-sub">Multi-Model Chess AI · Loading…</div>
+        </div>
+      </div>
+      <div id="status-badge">
+        <span class="status-dot"></span>
+        <span id="status-text">Đang kết nối…</span>
+      </div>
+    </header>
+
+    <!-- ── Main ── -->
+    <main>
+
+      <!-- Left Panel -->
+      <div class="panel-left">
+
+        <!-- Game Setup -->
+        <div class="card">
+          <div class="card-title">⚙ Cài đặt ván cờ</div>
+
+          <!-- Mode selector -->
+          <div class="mode-tabs">
+            <div class="mode-tab active" id="tab-vs-ai" data-mode="ai">🤖 vs AI</div>
+            <div class="mode-tab" id="tab-vs-pvp" data-mode="pvp">👥 2 Người</div>
+            <div class="mode-tab" id="tab-vs-aiai" data-mode="aiai">🤖🤖 AI đấu</div>
+          </div>
+
+          <!-- vs AI panel -->
+          <div id="panel-ai">
+            <div class="card-title" style="margin-top:0; margin-bottom:6px;">Độ khó AI</div>
+            <div class="diff-grid" id="ai-diff-grid">
+              <button class="diff-btn" data-diff="1">😊 Dễ</button>
+              <button class="diff-btn" data-diff="2">🤔 TB</button>
+              <button class="diff-btn active" data-diff="3">🔥 Khó</button>
+              <button class="diff-btn" data-diff="4">💀 Max</button>
+            </div>
+            <div class="model-label">🧠 Model AI</div>
+            <select class="model-select" id="ai-model-select">
+              <option value="best_model">Đang tải models…</option>
+            </select>
+            <div class="card-title" style="margin-top:14px; margin-bottom:6px;">Bạn chơi màu</div>
+            <div class="color-btns">
+              <div class="color-btn active" id="btn-white" data-color="white">♙ Trắng</div>
+              <div class="color-btn" id="btn-black" data-color="black">♟ Đen</div>
+            </div>
+          </div>
+
+          <!-- 2-Player panel -->
+          <div id="panel-pvp" style="display:none;">
+            <div class="card-title" style="margin-top:0; margin-bottom:8px;">Tên người chơi</div>
+            <div class="pvp-names">
+              <div class="pvp-name-row">
+                <span class="pvp-name-icon">♙</span>
+                <input class="pvp-name-input" id="pvp-name-white" type="text" placeholder="Bên Trắng" maxlength="20"
+                  value="Người chơi 1" />
+              </div>
+              <div class="pvp-name-row">
+                <span class="pvp-name-icon">♟</span>
+                <input class="pvp-name-input" id="pvp-name-black" type="text" placeholder="Bên Đen" maxlength="20"
+                  value="Người chơi 2" />
+              </div>
+            </div>
+          </div>
+
+          <!-- AI vs AI panel -->
+          <div id="panel-aiai" style="display:none;">
+            <!-- White AI -->
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:5px;">
+              <span style="font-size:1rem;">♙</span>
+              <span style="font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--text-3);">AI Trắng</span>
+            </div>
+            <div class="diff-grid" id="aiai-diff-white">
+              <button class="diff-btn" data-diff="1" data-side="white">😊 Dễ</button>
+              <button class="diff-btn" data-diff="2" data-side="white">🤔 TB</button>
+              <button class="diff-btn active" data-diff="3" data-side="white">🔥 Khó</button>
+              <button class="diff-btn" data-diff="4" data-side="white">💀 Max</button>
+            </div>
+            <div class="model-label">🧠 Model Trắng</div>
+            <select class="model-select" id="aiai-model-white">
+              <option value="best_model">Loading…</option>
+            </select>
+
+            <!-- Black AI -->
+            <div style="display:flex; align-items:center; gap:6px; margin:10px 0 5px;">
+              <span style="font-size:1rem;">♟</span>
+              <span style="font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--text-3);">AI Đen</span>
+            </div>
+            <div class="diff-grid" id="aiai-diff-black">
+              <button class="diff-btn" data-diff="1" data-side="black">😊 Dễ</button>
+              <button class="diff-btn" data-diff="2" data-side="black">🤔 TB</button>
+              <button class="diff-btn active" data-diff="3" data-side="black">🔥 Khó</button>
+              <button class="diff-btn" data-diff="4" data-side="black">💀 Max</button>
+            </div>
+            <div class="model-label">🧠 Model Đen</div>
+            <select class="model-select" id="aiai-model-black">
+              <option value="best_model">Loading…</option>
+            </select>
+
+            <div class="card-title" style="margin-top:14px; margin-bottom:6px;">⚡ Tốc độ tự động</div>
+            <div class="speed-grid">
+              <button class="speed-btn" data-ms="2000">🐢 Chậm</button>
+              <button class="speed-btn active" data-ms="800">🐇 Vừa</button>
+              <button class="speed-btn" data-ms="150">⚡ Nhanh</button>
+            </div>
+            <button id="btn-aiai-toggle">▶ Bắt đầu đấu</button>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="card">
+          <div class="card-title">🎮 Điều khiển</div>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <button class="action-btn" id="btn-new-game">✦ Ván mới</button>
+            <button class="action-btn" id="btn-undo">↩ Hoàn tác</button>
+          </div>
+        </div>
+
+        <!-- Evaluation -->
+        <div class="card">
+          <div class="card-title">📊 Đánh giá vị thế</div>
+          <div class="eval-bar-wrap">
+            <div class="eval-bar-track">
+              <div class="eval-bar-fill" id="eval-bar"></div>
+            </div>
+            <span class="eval-score" id="eval-score">0.00</span>
+          </div>
+          <div class="eval-label" id="eval-label">Cân bằng</div>
+        </div>
+
+        <!-- Model info (dynamically populated) -->
+        <div class="card">
+          <div class="card-title">🧠 Danh sách mô hình</div>
+          <div id="model-list" style="max-height:220px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--border) transparent;">
+            <div style="font-size:0.72rem; color:var(--text-3);">Đang tải…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Board Center -->
+      <div class="board-wrap">
+        <!-- AI mode indicator -->
+        <div class="turn-indicator" id="ai-turn-indicator">
+          <div class="turn-dot white" id="turn-dot"></div>
+          <span id="turn-text">Lượt đi: Trắng</span>
+          <span id="ai-thinking" class="ml-2">
+            <div class="spinner"></div> AI đang nghĩ…
+          </span>
+        </div>
+        <!-- AI duel live banner -->
+
+        <div id="pvp-banner">
+          <span class="pvp-crown" id="pvp-crown">♙</span>
+          <span id="pvp-turn-text">Người chơi 1 — Trắng đi</span>
+        </div>
+
+        <div id="board-container">
+          <div id="board"></div>
+          <div id="result-overlay">
+            <div class="result-emoji" id="res-emoji">🏆</div>
+            <div class="result-text" id="res-text">Ván đấu kết thúc</div>
+            <div class="result-sub" id="res-sub">—</div>
+            <button class="result-play-again" id="btn-play-again">✦ Chơi lại</button>
+          </div>
+        </div>
+
+        <div class="board-coords">
+          <span>a</span><span>b</span><span>c</span><span>d</span>
+          <span>e</span><span>f</span><span>g</span><span>h</span>
+        </div>
+        <div id="aiai-banner">
+          <span class="aiai-pulse"></span>
+          <span id="aiai-turn-text">🤖 AI Trắng đang tính…</span>
+        </div>
+      </div>
+
+      <!-- Right Panel -->
+      <div class="panel-right">
+
+        <!-- Move history -->
+        <div class="card">
+          <div class="card-title">📋 Lịch sử nước đi</div>
+          <div id="move-list"></div>
+          <div id="no-moves" style="font-size:0.72rem; color:var(--text-3); margin-top:4px;">Chưa có nước đi</div>
+        </div>
+
+        <!-- Top moves (AI only) -->
+        <div class="card" id="card-top-moves">
+          <div class="card-title">🔍 Top nước đi AI đang xét</div>
+          <div id="top-moves-list">
+            <div style="font-size:0.72rem; color:var(--text-3);">Chưa có dữ liệu</div>
+          </div>
+        </div>
+
+        <!-- Captured pieces -->
+        <div class="card">
+          <div class="card-title">⚔ Quân bị bắt</div>
+          <div style="font-size:0.8rem; margin-bottom:4px; color:var(--text-2);">Trắng bắt:</div>
+          <div id="captured-white" style="font-size:1.2rem; min-height:24px; line-height:1.4;">—</div>
+          <div style="font-size:0.8rem; margin-top:8px; margin-bottom:4px; color:var(--text-2);">Đen bắt:</div>
+          <div id="captured-black" style="font-size:1.2rem; min-height:24px; line-height:1.4;">—</div>
+        </div>
+
+        <!-- FEN display -->
+        <div class="card">
+          <div class="card-title">🔗 FEN</div>
+          <div id="fen-display" style="font-family:'Fira Mono',monospace; font-size:0.62rem; color:var(--text-3);
+                    word-break:break-all; line-height:1.6; cursor:pointer;" title="Click để copy FEN">
+            rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+          </div>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- ── Footer ── -->
+    <footer>
+      <span id="footer-label">Chess AI · Multi-Model</span>
+      <span id="footer-device">Device: —</span>
+    </footer>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    /* ──────────────────── State ──────────────────── */
+    let game = new Chess();
+    let board = null;
+    let playerColor = 'white';
+    let difficulty = 3;
+    let aiModel = 'best_model';     // key for vs-AI model
+    let moveHistory = [];
+    let isAITurn = false;
+    let lastEval = 0;
+    let gameMode = 'ai';            // 'ai' | 'pvp' | 'aiai'
+
+    // Global model registry populated from /api/models
+    let ALL_MODELS = [];   // [{key, display, arch, arch_type, epoch, loss}, …]
+    let DEFAULT_MODEL_KEY = 'best_model';
+
+    /* ──────────── Piece symbols for captured display ──────────── */
+    const PIECE_SYMBOLS = {
+      p: '♟', n: '♞', b: '♝', r: '♜', q: '♛', k: '♚',
+      P: '♙', N: '♘', B: '♗', R: '♖', Q: '♕', K: '♔',
+    };
+
+    /* ──────────── Init chessboard.js ──────────── */
+    function initBoard() {
+      const cfg = {
+        draggable: true,
+        position: 'start',
+        orientation: playerColor,
+        pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+        onDragStart: onDragStart,
+        onDrop: onDrop,
+        onSnapEnd: onSnapEnd,
+        onMouseoverSquare: highlightLegal,
+        onMouseoutSquare: removeHints,
+        moveSpeed: 350,
+        snapbackSpeed: 250,
+        snapSpeed: 80,
+      };
+      if (board) board.destroy();
+      board = Chessboard('board', cfg);
+
+      // Responsive sizing
+      const size = Math.min(window.innerWidth - 32, 520);
+      $('#board').css({ width: size + 'px', height: size + 'px' });
+      board.resize();
+    }
+
+    /* ──────────── Drag handlers ──────────── */
+    function onDragStart(src, piece) {
+      if (game.game_over()) return false;
+      if (isAITurn) return false;
+      const isWhite = piece.search(/^w/) !== -1;
+      if (gameMode === 'ai') {
+        // Only player's side can drag
+        if ((playerColor === 'white' && !isWhite) ||
+          (playerColor === 'black' && isWhite)) return false;
+      } else {
+        // PvP: only current turn's pieces
+        const turnIsWhite = game.turn() === 'w';
+        if (turnIsWhite !== isWhite) return false;
+      }
+    }
+
+    let greySquares = [];
+    function highlightLegal(square, piece) {
+      if (!piece) return;
+      if (gameMode === 'ai') {
+        if ((playerColor === 'white' && !piece.startsWith('w')) ||
+          (playerColor === 'black' && !piece.startsWith('b'))) return;
+      } else {
+        // PvP: highlight only for current turn
+        const turnIsWhite = game.turn() === 'w';
+        if (turnIsWhite && !piece.startsWith('w')) return;
+        if (!turnIsWhite && !piece.startsWith('b')) return;
+      }
+      const moves = game.moves({ square, verbose: true });
+      moves.forEach(m => {
+        const sq = $('#board .square-' + m.to);
+        sq.addClass('hint-square');
+        sq.css('background', 'radial-gradient(circle, rgba(34,211,238,0.35) 0%, transparent 70%)');
+        greySquares.push(m.to);
+      });
+    }
+    function removeHints() {
+      greySquares.forEach(sq => $('#board .square-' + sq).css('background', ''));
+      greySquares = [];
+    }
+
+    function onDrop(src, tgt) {
+      removeHints();
+      const move = game.move({ from: src, to: tgt, promotion: 'q' });
+      if (!move) return 'snapback';
+
+      moveHistory.push({ san: move.san, color: move.color });
+      renderMoveHistory();
+      updateUI();
+
+      if (game.game_over()) {
+        showGameOver();
+      } else if (gameMode === 'ai') {
+        scheduleAIMove();
+      }
+      // PvP: nothing extra — other player just moves next
+    }
+    function onSnapEnd() {
+      board.position(game.fen());
+    }
+
+    /* ──────────── AI move (vs-AI mode) ──────────── */
+    async function scheduleAIMove() {
+      isAITurn = true;
+      $('#ai-thinking').addClass('show');
+      await new Promise(r => setTimeout(r, 80));
+
+      try {
+        const resp = await fetch('/api/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fen: game.fen(), difficulty, model: aiModel }),
+        });
+        if (!resp.ok) throw new Error('API error');
+        const data = await resp.json();
+
+        const from = data.move.slice(0, 2);
+        const to = data.move.slice(2, 4);
+        const promo = data.move[4] || 'q';
+
+        const move = game.move({ from, to, promotion: promo });
+        if (move) {
+          moveHistory.push({ san: move.san, color: move.color });
+          // Fly the piece smoothly, then snap board silently
+          await animatePieceMove(from, to, game.fen());
+          highlightMove(from, to);
+        }
+
+        lastEval = data.evaluation;
+        updateEval(data.evaluation, playerColor === 'white');
+        renderTopMoves(data.top_moves);
+        renderMoveHistory();
+        updateUI();
+
+        if (data.is_game_over) showGameOver(data.result);
+      } catch (e) {
+        showToast('Lỗi kết nối AI');
+      } finally {
+        isAITurn = false;
+        $('#ai-thinking').removeClass('show');
+      }
+    }
+
+    /* ──────────── Custom piece CSS animation ──────────── */
+    // Animates a single piece from `from` to `to` using GPU transform.
+    // After ANIM_MS the board is snapped silently (no flash).
+    const ANIM_MS = 280;
+
+    function animatePieceMove(from, to, newFen) {
+      return new Promise(resolve => {
+        const $fromSq = $('#board .square-' + from);
+        const $toSq = $('#board .square-' + to);
+        const $piece = $fromSq.find('img');
+
+        if (!$piece.length) {
+          // Fallback: silent snap
+          board.position(newFen, false);
+          return resolve();
+        }
+
+        // Pixel positions (viewport-relative)
+        const fr = $fromSq[0].getBoundingClientRect();
+        const tr = $toSq[0].getBoundingClientRect();
+        const dx = tr.left - fr.left;
+        const dy = tr.top - fr.top;
+
+        // Clone the moving piece onto body so it flies above everything
+        const $clone = $piece.clone().css({
+          position: 'fixed',
+          left: fr.left + 'px',
+          top: fr.top + 'px',
+          width: fr.width + 'px',
+          height: fr.height + 'px',
+          margin: 0,
+          zIndex: 9999,
+          pointerEvents: 'none',
+          willChange: 'transform',
+          transition: `transform ${ANIM_MS}ms cubic-bezier(0.3, 0, 0.2, 1)`,
+        });
+        $('body').append($clone);
+
+        // Hide original piece during flight
+        $piece.css('opacity', '0');
+
+        // Hide piece on destination so there's no ghost
+        $toSq.find('img').css('opacity', '0');
+
+        // Start CSS transform on next frame (needed for transition to fire)
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            $clone.css('transform', `translate(${dx}px, ${dy}px)`);
+          });
+        });
+
+        // After animation: silent snap, cleanup
+        setTimeout(() => {
+          board.position(newFen, false); // instant, no chessboard.js animation
+          $clone.remove();
+          resolve();
+        }, ANIM_MS + 20); // tiny buffer
+      });
+    }
+
+    /* ──────────── Highlight last AI move ──────────── */
+    function highlightMove(from, to) {
+      $('.square-55d63').css({ 'box-shadow': '', 'transition': 'box-shadow 0.2s ease' });
+      requestAnimationFrame(() => {
+        $('.square-' + from).css('box-shadow', 'inset 0 0 0 3px rgba(240,210,0,0.9)');
+        $('.square-' + to).css('box-shadow', 'inset 0 0 0 3px rgba(79,110,247,0.9)');
+      });
+    }
+
+    /* ──────────── Eval bar ──────────── */
+    function updateEval(val, fromWhitePerspective) {
+      // val in [-1,1]: +1 = white winning, -1 = black winning
+      const display = fromWhitePerspective ? val : -val;
+      const pct = ((display + 1) / 2 * 100).toFixed(0);
+      $('#eval-bar').css('width', pct + '%');
+      $('#eval-score').text((val >= 0 ? '+' : '') + val.toFixed(2));
+      let label = 'Cân bằng';
+      if (display > 0.6) label = '⬆ Trắng lợi thế';
+      else if (display < -0.6) label = '⬇ Đen lợi thế';
+      else if (display > 0.2) label = 'Trắng nhỉnh hơn';
+      else if (display < -0.2) label = 'Đen nhỉnh hơn';
+      $('#eval-label').text(label);
+    }
+
+    /* ──────────── Top moves ──────────── */
+    function renderTopMoves(moves) {
+      const el = $('#top-moves-list');
+      if (!moves || !moves.length) { el.html('<div style="font-size:0.72rem;color:var(--text-3)">Chưa có dữ liệu</div>'); return; }
+      el.html(moves.map(m => `
+    <div class="top-move-row">
+      <span class="top-move-uci">${m.uci}</span>
+      <div class="top-move-bar-wrap">
+        <div class="top-move-bar" style="width:${(m.prob * 100).toFixed(1)}%"></div>
+      </div>
+      <span class="top-move-pct">${(m.prob * 100).toFixed(1)}%</span>
+    </div>
+  `).join(''));
+    }
+
+    /* ──────────── Move history ──────────── */
+    function renderMoveHistory() {
+      const el = $('#move-list');
+      const noEl = $('#no-moves');
+      if (!moveHistory.length) { el.html(''); noEl.show(); return; }
+      noEl.hide();
+      let html = '';
+      for (let i = 0; i < moveHistory.length; i += 2) {
+        const num = Math.floor(i / 2) + 1;
+        const wm = moveHistory[i];
+        const bm = moveHistory[i + 1];
+        const wLast = (i === moveHistory.length - 1);
+        const bLast = (i + 1 === moveHistory.length - 1);
+        html += `<span class="move-num">${num}.</span>`;
+        html += `<span class="move-cell ${wLast ? 'latest' : ''}">${wm.san}</span>`;
+        html += `<span class="move-cell ${bLast && bm ? 'latest' : ''}">${bm ? bm.san : ''}</span>`;
+      }
+      el.html(html);
+      el.scrollTop(el[0].scrollHeight);
+    }
+
+    /* ──────────── Captured pieces ──────────── */
+    function updateCaptured() {
+      const history = game.history({ verbose: true });
+      const capturedByWhite = [], capturedByBlack = [];
+      history.forEach(m => {
+        if (m.captured) {
+          if (m.color === 'w') capturedByWhite.push(m.captured.toUpperCase());
+          else capturedByBlack.push(m.captured.toLowerCase());
+        }
+      });
+      const toSymbols = arr => arr.map(p => PIECE_SYMBOLS[p] || p).join(' ') || '—';
+      $('#captured-white').html(toSymbols(capturedByWhite));
+      $('#captured-black').html(toSymbols(capturedByBlack));
+    }
+
+    /* ──────────── General UI update ──────────── */
+    function updateUI() {
+      const turn = game.turn() === 'w' ? 'white' : 'black';
+      const dot = $('#turn-dot');
+      dot.removeClass('white black').addClass(turn);
+      $('#turn-text').text('Lượt đi: ' + (turn === 'white' ? 'Trắng' : 'Đen'));
+      $('#fen-display').text(game.fen());
+      updateCaptured();
+
+      if (gameMode === 'pvp') {
+        const w = $('#pvp-name-white').val() || 'Người chơi 1';
+        const b = $('#pvp-name-black').val() || 'Người chơi 2';
+        const crown = turn === 'white' ? '♙' : '♟';
+        const name = turn === 'white' ? w : b;
+        const side = turn === 'white' ? 'Trắng' : 'Đen';
+        $('#pvp-crown').text(crown);
+        $('#pvp-turn-text').text(`${name} — ${side} đi`);
+        // re-animate banner
+        $('#pvp-banner').removeClass('show');
+        setTimeout(() => $('#pvp-banner').addClass('show'), 20);
+      }
+    }
+
+    /* ──────────── Game over overlay ──────────── */
+    function showGameOver(result) {
+      let emoji = '🏁', text = '', sub = '';
+      if (!result) result = game.result ? game.result() : '*';
+
+      if (game.in_checkmate()) {
+        const winColor = game.turn() === 'w' ? 'Đen' : 'Trắng';
+        if (gameMode === 'pvp') {
+          const w = $('#pvp-name-white').val() || 'Người chơi 1';
+          const b = $('#pvp-name-black').val() || 'Người chơi 2';
+          const winName = winColor === 'Trắng' ? w : b;
+          emoji = '🏆';
+          text = winName + ' chiến thắng!';
+        } else {
+          emoji = winColor === 'Trắng' ? '🏆' : '💀';
+          text = winColor + ' chiến thắng!';
+        }
+        sub = 'Chiếu hết!';
+      } else if (game.in_stalemate()) { emoji = '🤝'; text = 'Hòa!'; sub = 'Stalemate'; }
+      else if (game.in_threefold_repetition()) { emoji = '🔁'; text = 'Hòa!'; sub = 'Lặp 3 lần'; }
+      else if (game.insufficient_material()) { emoji = '🤝'; text = 'Hòa!'; sub = 'Thiếu vật liệu'; }
+      else if (game.in_draw()) { emoji = '👐'; text = 'Hòa!'; sub = result || ''; }
+      else { emoji = '🏁'; text = 'Kết thúc'; sub = result || ''; }
+
+      $('#res-emoji').text(emoji);
+      $('#res-text').text(text);
+      $('#res-sub').text(sub);
+      $('#result-overlay').addClass('show');
+    }
+
+    /* ──────────── New game ──────────── */
+    function newGame() {
+      game = new Chess();
+      moveHistory = [];
+      isAITurn = false;
+      renderMoveHistory();
+      renderTopMoves([]);
+      updateEval(0, true);
+      $('#result-overlay').removeClass('show');
+      $('.square-55d63').css('box-shadow', '');
+      $('#no-moves').show();
+      $('#captured-white').html('—');
+      $('#captured-black').html('—');
+
+      if (gameMode === 'pvp') {
+        board.orientation('white');
+        board.start();
+        updateUI();
+        const w = $('#pvp-name-white').val() || 'Người chơi 1';
+        showToast(`♟ Ván mới! ${w} (Trắng) đi trước!`);
+      } else if (gameMode === 'aiai') {
+        aiaiStop();
+        board.orientation('white');
+        board.start();
+        updateUI();
+        $('#btn-aiai-toggle').text('▶ Bắt đầu đấu').removeClass('running');
+        showToast('🤖🤖 Ván mới! Nhấn “Bắt đầu đấu” để chạy.');
+      } else {
+        board.orientation(playerColor);
+        board.start();
+        updateUI();
+        showToast('Ván mới bắt đầu! ' + (playerColor === 'white' ? '♙ Bạn đi trước.' : '♟ AI đi trước.'));
+        if (playerColor === 'black') scheduleAIMove();
+      }
+    }
+
+    /* ──────────── Undo ──────────── */
+    function undoMove() {
+      if (gameMode === 'aiai') {
+        // Pause first, then undo 1 half-move
+        aiaiStop();
+        if (!moveHistory.length) { showToast('Chưa có nước nào!'); return; }
+        game.undo();
+        moveHistory.splice(-1, 1);
+      } else if (gameMode === 'pvp') {
+        if (!moveHistory.length) { showToast('Không thể hoàn tác!'); return; }
+        game.undo();
+        moveHistory.splice(-1, 1);
+      } else {
+        if (moveHistory.length < 2) { showToast('Không thể hoàn tác!'); return; }
+        game.undo(); game.undo();
+        moveHistory.splice(-2, 2);
+      }
+      board.position(game.fen());
+      renderMoveHistory();
+      updateUI();
+      showToast('↩ Đã hoàn tác');
+    }
+
+    /* ──────────── Toast ──────────── */
+    function showToast(msg) {
+      const t = $('#toast');
+      t.text(msg).addClass('show');
+      clearTimeout(window._toastTm);
+      window._toastTm = setTimeout(() => t.removeClass('show'), 2800);
+    }
+
+    /* ──────────── Load models from API ──────────── */
+    async function loadModels() {
+      try {
+        /* 1. Fetch status for device info */
+        const st  = await fetch('/api/status');
+        const std = await st.json();
+        const hw  = std.device.includes('cuda') ? '🟢 GPU' : '🟡 CPU';
+        $('#footer-device').text('Device: ' + std.device);
+
+        /* 2. Fetch model list */
+        const r = await fetch('/api/models');
+        const d = await r.json();
+        ALL_MODELS = d.models;
+        DEFAULT_MODEL_KEY = d.default;
+        aiModel = DEFAULT_MODEL_KEY;
+
+        /* 3. Populate all three <select> dropdowns */
+        const mkOptions = (selectedKey) =>
+          ALL_MODELS.map(m => {
+            const archTag = m.arch_type === 'se' ? '✦ SE' : 'V1';
+            const label   = `${m.display}  [ep${m.epoch} loss${m.loss.toFixed(3)}]`;
+            const sel     = m.key === selectedKey ? ' selected' : '';
+            return `<option value="${m.key}"${sel}>${archTag}  ${label}</option>`;
+          }).join('');
+
+        $('#ai-model-select').html(mkOptions(DEFAULT_MODEL_KEY));
+        $('#aiai-model-white').html(mkOptions(DEFAULT_MODEL_KEY));
+        $('#aiai-model-black').html(mkOptions(DEFAULT_MODEL_KEY));
+
+        /* Also init aiai model vars */
+        aiaiModelWhite = DEFAULT_MODEL_KEY;
+        aiaiModelBlack = DEFAULT_MODEL_KEY;
+
+        /* 4. Populate model info card */
+        const listHtml = ALL_MODELS.map(m => {
+          const archCls  = m.arch_type === 'se' ? 'model-info-arch-se' : 'model-info-arch-v1';
+          const archIcon = m.arch_type === 'se' ? '✦' : '■';
+          return `
+            <div class="model-info-row">
+              <div class="model-info-name">${m.display}</div>
+              <div class="model-info-meta ${archCls}">${archIcon} ${m.arch}</div>
+              <div class="model-info-meta">ep ${m.epoch} · loss <span style="color:var(--yellow)">${m.loss.toFixed(4)}</span> · ${m.filename}</div>
+            </div>`;
+        }).join('');
+        $('#model-list').html(listHtml);
+
+        /* 5. Update status badge and logo */
+        const seCount = ALL_MODELS.filter(m => m.arch_type === 'se').length;
+        const v1Count = ALL_MODELS.filter(m => m.arch_type === 'v1').length;
+        $('#status-text').text(`${hw} · ${ALL_MODELS.length} models (${seCount} SE + ${v1Count} V1)`);
+        $('#logo-sub').text(`Multi-Model Chess AI · ${ALL_MODELS.length} checkpoints`);
+
+      } catch(e) {
+        $('#status-text').text('🔴 Mất kết nối');
+        console.error(e);
+      }
+    }
+
+    /* ──────────── AI vs AI State ──────────── */
+    let aiaiRunning    = false;
+    let aiaiDelay      = 800;
+    let aiaiDiffWhite  = 3;
+    let aiaiDiffBlack  = 3;
+    let aiaiModelWhite = 'best_model';
+    let aiaiModelBlack = 'best_model';
+    let aiaiTimer      = null;
+
+    function aaiBannerUpdate() {
+      const isWhite   = game.turn() === 'w';
+      const side      = isWhite ? 'Trắng ♙' : 'Đen ♟';
+      const diff      = isWhite ? aiaiDiffWhite  : aiaiDiffBlack;
+      const mdlKey    = isWhite ? aiaiModelWhite : aiaiModelBlack;
+      const mdlInfo   = ALL_MODELS.find(m => m.key === mdlKey);
+      const mdlLabel  = mdlInfo ? mdlInfo.display : mdlKey;
+      const diffLabel = ['', 'Dễ', 'TB', 'Khó', 'Max'][diff] || '';
+      $('#aiai-turn-text').text(`🤖 AI ${side} [độ ${diffLabel}] · ${mdlLabel}`);
+      $('#aiai-banner').removeClass('show');
+      setTimeout(() => $('#aiai-banner').addClass('show'), 20);
+    }
+
+    async function aaistep() {
+      if (!aiaiRunning || game.game_over()) {
+        if (game.game_over()) { aiaiStop(); showGameOver(); }
+        return;
+      }
+
+      aaiBannerUpdate();
+      isAITurn = true;
+      $('#ai-thinking').addClass('show');
+
+      try {
+        const currentDiff  = game.turn() === 'w' ? aiaiDiffWhite  : aiaiDiffBlack;
+        const currentModel = game.turn() === 'w' ? aiaiModelWhite : aiaiModelBlack;
+        const resp = await fetch('/api/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fen: game.fen(), difficulty: currentDiff, model: currentModel }),
+        });
+        if (!resp.ok) throw new Error();
+        const data = await resp.json();
+
+        const move = game.move({
+          from: data.move.slice(0, 2),
+          to: data.move.slice(2, 4),
+          promotion: data.move[4] || 'q'
+        });
+        if (move) {
+          const from = data.move.slice(0, 2);
+          const to = data.move.slice(2, 4);
+          moveHistory.push({ san: move.san, color: move.color });
+          await animatePieceMove(from, to, game.fen());
+          highlightMove(from, to);
+        }
+
+        updateEval(data.evaluation, true);
+        renderTopMoves(data.top_moves);
+        renderMoveHistory();
+        updateUI();
+
+        if (data.is_game_over) { aiaiStop(); showGameOver(data.result); return; }
+
+        // Schedule next move
+        aiaiTimer = setTimeout(aaistep, aiaiDelay);
+      } catch (e) {
+        showToast('Lỗi kết nối AI');
+        aiaiStop();
+      } finally {
+        isAITurn = false;
+        $('#ai-thinking').removeClass('show');
+      }
+
+    }
+
+    function aiaiStart() {
+      if (aiaiRunning) return;
+      if (game.game_over()) { showToast('Ván đã kết thúc, hãy bắt đầu ván mới!'); return; }
+      aiaiRunning = true;
+      $('#btn-aiai-toggle').text('⏹ Dừng').addClass('running');
+      showToast('🤖🤖 2 AI đang đấu nhau!');
+      aaistep();
+    }
+
+    function aiaiStop() {
+      aiaiRunning = false;
+      clearTimeout(aiaiTimer);
+      $('#btn-aiai-toggle').text('▶ Tiếp tục').removeClass('running');
+      $('#aiai-banner').removeClass('show');
+      isAITurn = false;
+      $('#ai-thinking').removeClass('show');
+    }
+
+    /* ──────────── Apply mode UI ──────────── */
+    function applyMode(mode) {
+      // Stop AI vs AI if switching away
+      if (gameMode === 'aiai' && mode !== 'aiai') aiaiStop();
+      gameMode = mode;
+
+      // Hide all panels / banners first
+      $('#panel-ai, #panel-pvp, #panel-aiai').hide();
+      $('#pvp-banner, #aiai-banner').removeClass('show');
+      $('#ai-turn-indicator').hide();
+      $('#card-top-moves').hide();
+
+      if (mode === 'pvp') {
+        $('#panel-pvp').show();
+        $('#pvp-banner').addClass('show');
+      } else if (mode === 'aiai') {
+        $('#panel-aiai').show();
+        $('#aiai-banner').addClass('show');
+        $('#card-top-moves').show();
+      } else {
+        // default: vs AI
+        $('#panel-ai').show();
+        $('#ai-turn-indicator').show();
+        $('#card-top-moves').show();
+      }
+    }
+
+    /* ──────────── Event bindings ──────────── */
+    $(document).ready(function () {
+      initBoard();
+      loadModels();   // replaces loadStatus() — fetches /api/models and /api/status together
+
+      // Mode tabs
+      $('.mode-tab').on('click', function () {
+        $('.mode-tab').removeClass('active');
+        $(this).addClass('active');
+        applyMode($(this).data('mode'));
+      });
+
+      // Difficulty buttons — each grid updates only its own side
+      $(document).on('click', '.diff-btn', function () {
+        const $grid = $(this).closest('.diff-grid');
+        $grid.find('.diff-btn').removeClass('active');
+        $(this).addClass('active');
+        const val = parseInt($(this).data('diff'));
+        const side = $(this).data('side');   // 'white', 'black', or undefined (vs-AI mode)
+        if (gameMode === 'aiai') {
+          if (side === 'white') { aiaiDiffWhite = val; showToast('AI Trắng: độ khó ' + $(this).text()); }
+          else if (side === 'black') { aiaiDiffBlack = val; showToast('AI Đen: độ khó ' + $(this).text()); }
+        } else {
+          difficulty = val;
+          showToast('Độ khó: ' + $(this).text());
+        }
+      });
+
+      // Model selects (native <select> elements)
+      $('#ai-model-select').on('change', function () {
+        aiModel = $(this).val();
+        const info = ALL_MODELS.find(m => m.key === aiModel);
+        showToast('🧠 Model: ' + (info ? info.display : aiModel));
+      });
+      $('#aiai-model-white').on('change', function () {
+        aiaiModelWhite = $(this).val();
+        const info = ALL_MODELS.find(m => m.key === aiaiModelWhite);
+        showToast('♙ AI Trắng: ' + (info ? info.display : aiaiModelWhite));
+      });
+      $('#aiai-model-black').on('change', function () {
+        aiaiModelBlack = $(this).val();
+        const info = ALL_MODELS.find(m => m.key === aiaiModelBlack);
+        showToast('♟ AI Đen: ' + (info ? info.display : aiaiModelBlack));
+      });
+
+      // Speed buttons
+      $(document).on('click', '.speed-btn', function () {
+        $('.speed-btn').removeClass('active');
+        $(this).addClass('active');
+        aiaiDelay = parseInt($(this).data('ms'));
+        showToast('Tốc độ: ' + $(this).text());
+      });
+
+      // Color buttons
+      $('.color-btn').on('click', function () {
+        $('.color-btn').removeClass('active');
+        $(this).addClass('active');
+        playerColor = $(this).data('color');
+      });
+
+      // AI vs AI toggle
+      $('#btn-aiai-toggle').on('click', function () {
+        if (aiaiRunning) { aiaiStop(); showToast('⏸ Đã tạm dừng'); }
+        else { aiaiStart(); }
+      });
+
+      // New game
+      $('#btn-new-game, #btn-play-again').on('click', newGame);
+      $('#btn-undo').on('click', undoMove);
+
+      // FEN copy
+      $('#fen-display').on('click', function () {
+        navigator.clipboard.writeText($(this).text()).then(() => showToast('📋 Đã copy FEN!'));
+      });
+
+      // Responsive resize
+      $(window).on('resize', function () {
+        const size = Math.min(window.innerWidth - 32, 520);
+        $('#board').css({ width: size + 'px', height: size + 'px' });
+        board.resize();
+      });
+    });
+  </script>
+</body>
+
+</html>
