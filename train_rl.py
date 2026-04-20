@@ -69,10 +69,10 @@ def apply_dirichlet_noise(node, alpha=0.3, epsilon=0.25):
         node.children[action].P = (1 - epsilon) * node.children[action].P + epsilon * noise[i]
 
 def get_terminal_value(board):
-    """Quy định Reward cốt lõi: Hòa = -1 (Phạt cả hai). Thua = -1."""
+    """Quy định Reward cốt lõi: Phạt cực nặng khi hòa trong MCTS."""
     res = board.result()
     if res == '1/2-1/2':
-        return -1.0  # Phạt nặng khi hòa
+        return 0.9  # Ở cuối MCTS, trả về 0.9 để nút cha (người đi nước đó) nhận -0.99
     # Người đến lượt mắc kẹt (bị chiếu bí) => Họ thua => Value = -1.
     return -1.0 
 
@@ -216,19 +216,30 @@ def run_rl_loop():
     print(f"[RL] Khởi tạo hệ thống RL - Draw = Loss trên {device}")
     
     model = AlphaZeroNetV1(10, 192).to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
     
-    ckpt_path = 'checkpoints/v1_finetuned_best.pth'
-    if os.path.exists(ckpt_path):
-        c = torch.load(ckpt_path, map_location=device)
+    rl_ckpt = 'checkpoints/rl_latest.pth'
+    base_ckpt = 'checkpoints/v1_finetuned_best.pth'
+    
+    iteration = 0
+    if os.path.exists(rl_ckpt):
+        print(f"[RL] Đang Nối Tiếp tiến trình cũ từ {rl_ckpt}...")
+        c = torch.load(rl_ckpt, map_location=device)
         model.load_state_dict(c['model_state_dict'])
-        print(f"[RL] Đã lấy được hạt giống tối thượng từ {ckpt_path}")
+        try:
+            optimizer.load_state_dict(c['optimizer_state_dict'])
+        except:
+            pass
+        iteration = c.get('iteration', 0)
+    elif os.path.exists(base_ckpt):
+        c = torch.load(base_ckpt, map_location=device)
+        model.load_state_dict(c['model_state_dict'])
+        print(f"[RL] Khởi tạo bắt đầu từ model Supervised {base_ckpt}")
     else:
-        print("[RL] ❌ Không tìm thấy v1_finetuned_best.pth!")
+        print("[RL] ❌ Không tìm thấy checkpoint nào!")
         return
         
     model.eval()
-    
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
     # Replay Buffer
     replay_buffer = deque(maxlen=200000)
     
@@ -252,10 +263,17 @@ def run_rl_loop():
 
     writer = SummaryWriter('runs/chess_rl')
     
-    iteration = 0
+    start_time = time.time()
+    MAX_TIME = 12 * 3600  # 12 tiếng
+    
     while True:
+        elapsed = time.time() - start_time
+        if elapsed > MAX_TIME:
+            print("[RL] ⏱️ Đã hết 12 tiếng Train. Dừng hệ thống an toàn!")
+            break
+            
         iteration += 1
-        print(f"\n[RL Iteration {iteration}] Bắt nạt AI tự đánh với chính mình...")
+        print(f"\n[RL Iteration {iteration} | {elapsed/3600:.1f}/12.0h] Bắt nạt AI tự đánh với chính mình...")
         model.eval()
         
         new_data = []
