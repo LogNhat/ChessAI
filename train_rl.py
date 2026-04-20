@@ -23,12 +23,19 @@ class MCTSNode:
         self.Q = 0.0
         self.children = {} # action (chess.Move) -> MCTSNode
         
-    def expand(self, legal_moves, action_probs):
+    def expand(self, legal_moves, action_probs, board=None):
         """Khởi tạo danh sách các nút con với Prior probability (P)"""
         for move in legal_moves:
             idx = MOVE_TO_INDEX.get(move.uci())
             if idx is not None:
-                self.children[move] = MCTSNode(prior=action_probs[idx])
+                p = action_probs[idx]
+                # Bơm P cục diện nếu đó là nước chiếu hết (Mate-in-1 Biasing)
+                if board is not None:
+                    board.push(move)
+                    if board.is_checkmate():
+                        p += 1000.0
+                    board.pop()
+                self.children[move] = MCTSNode(prior=p)
 
     def is_leaf(self):
         return len(self.children) == 0
@@ -144,7 +151,7 @@ class VectorSelfPlay:
             # Expand & Backprop
             for k, b in enumerate(leaf_boards):
                 node = search_paths[k][-1]
-                node.expand(list(b.legal_moves), probs[k])
+                node.expand(list(b.legal_moves), probs[k], b)
                 
                 # backprop
                 val = values[k]
@@ -176,7 +183,7 @@ class VectorSelfPlay:
                     pi[MOVE_TO_INDEX[a.uci()]] = c.N / total_n
                 
                 # Khám phá vài nước đầu, sau đó đánh tối ưu
-                if len(self.histories[i]) < 30:
+                if len(self.histories[i]) < 60:
                     action = random.choices(actions, weights=visits, k=1)[0]
                 else:
                     action = actions[np.argmax(visits)]
@@ -241,7 +248,7 @@ def run_rl_loop():
         with torch.no_grad():
             pol, _ = model(tensor)
         pol = F.softmax(pol, dim=1).cpu().numpy()[0]
-        env.roots[i].expand(legal, pol)
+        env.roots[i].expand(legal, pol, env.boards[i])
 
     writer = SummaryWriter('runs/chess_rl')
     

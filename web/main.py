@@ -19,6 +19,7 @@ import random
 from model.alphazero_net_v1 import AlphaZeroNetV1
 from model.alphazero_net   import AlphaZeroNet
 from env.encoder import Encoder, MOVE_TO_INDEX, NUM_MOVES
+from web.mcts_inference import search_mcts
 
 # ─── Device ──────────────────────────────────────────────────────────────────
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -47,6 +48,7 @@ def _load_model(path: str):
 
 # ─── Pretty display names ────────────────────────────────────────────────────
 _DISPLAY = {
+    'rl_latest':           'RL Latest (Self-Play)',
     'best_model':          'V1 Best  (Plain ResNet)',
     'finetuned_best':      'Finetuned Best  (SE-ResNet ep4)',
     'model_ep1_batch2000': 'Pretrain EP1-B2000',
@@ -75,7 +77,9 @@ for fname in pth_files:
     try:
         net, ckpt, arch, arch_label = _load_model(path)
         display = _DISPLAY.get(key, key)
-        if "v1_finetuned" in key:
+        if "rl" in key:
+            category = "Reinforcement Learning"
+        elif "v1_finetuned" in key:
             category = "V1 True Finetuning (6M Elite)"
         elif arch == 'se':
             category = "SE-ResNet (Failed Transfer)"
@@ -85,13 +89,21 @@ for fname in pth_files:
         MODELS[key] = dict(net=net, ckpt=ckpt, arch=arch, category=category,
                            arch_label=arch_label, display=display, filename=fname)
         ep   = ckpt.get('epoch', '?')
-        loss = ckpt.get('loss',  float('nan'))
+        loss = ckpt.get('loss',  0.0)
+        import math
+        if isinstance(loss, float) and math.isnan(loss):
+            loss = 0.0
         print(f"[AI] Loaded '{key}'  arch={arch_label}  ep={ep}  loss={loss:.4f}")
     except Exception as e:
         print(f"[AI] SKIP '{fname}': {e}")
 
 # Fallback: make sure there's always a default
-DEFAULT_MODEL = 'best_model' if 'best_model' in MODELS else next(iter(MODELS))
+if 'rl_latest' in MODELS:
+    DEFAULT_MODEL = 'rl_latest'
+elif 'best_model' in MODELS:
+    DEFAULT_MODEL = 'best_model'
+else:
+    DEFAULT_MODEL = next(iter(MODELS))
 print(f"[AI] Default model: {DEFAULT_MODEL}  |  Total loaded: {len(MODELS)}")
 
 encoder = Encoder()
@@ -132,6 +144,11 @@ def get_ai_move(board: chess.Board, difficulty: int = 3,
 
     entry = MODELS.get(model_key) or MODELS[DEFAULT_MODEL]
     net   = entry['net']
+
+    if 'rl' in model_key:
+        num_sims = 2000 if difficulty >= 3 else 300
+        uci, val, top_moves = search_mcts(board, net, device, num_simulations=num_sims)
+        return uci, val, top_moves
 
     tensor_t = torch.from_numpy(
         encoder.board_to_tensor(board)
@@ -208,6 +225,11 @@ async def list_models():
     result = []
     for key, m in MODELS.items():
         ckpt = m['ckpt']
+        loss = ckpt.get('loss', 0.0)
+        import math
+        if isinstance(loss, float) and math.isnan(loss):
+            loss = 0.0
+            
         result.append({
             "key":        key,
             "display":    m['display'],
@@ -216,7 +238,7 @@ async def list_models():
             "category":   m['category'],
             "filename":   m['filename'],
             "epoch":      int(ckpt.get('epoch', 0)),
-            "loss":       float(ckpt.get('loss', float('nan'))),
+            "loss":       float(loss),
         })
     return {"models": result, "default": DEFAULT_MODEL}
 
