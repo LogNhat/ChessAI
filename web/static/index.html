@@ -1286,7 +1286,7 @@
         const resp = await fetch('/api/move', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fen: game.fen(), difficulty, model: aiModel }),
+          body: JSON.stringify({ fen: game.fen(), move_history: game.history(), difficulty, model: aiModel }),
         });
         if (!resp.ok) throw new Error('API error');
         const data = await resp.json();
@@ -1686,7 +1686,7 @@
         const resp = await fetch('/api/move', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fen: game.fen(), difficulty: currentDiff, model: currentModel }),
+          body: JSON.stringify({ fen: game.fen(), move_history: game.history(), difficulty: currentDiff, model: currentModel }),
         });
         if (!resp.ok) throw new Error();
         const data = await resp.json();

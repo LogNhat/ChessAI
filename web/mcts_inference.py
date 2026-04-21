@@ -56,12 +56,10 @@ class MCTSNode:
 def get_terminal_value(board):
     res = board.result()
     if res == '1/2-1/2':
-        # Do model đang train với z=-1, nó luôn đánh giá mọi state hòa là win cho bản thân.
-        # Nên ở bước cuối cùng MCTS, ta phải "đáp trả" cực mạnh vào nhánh sinh ra cờ hòa.
-        # Ở đây return 0.9 (tức đối thủ được 0.9 điểm từ việc cờ hòa này), 
-        # do đó nút cha (bản thân AI đi nước cờ đó) sẽ bị phạt âm điểm: v = -0.9 * 0.99 = -0.891
-        # Tránh hòa bằng mọi giá, thà tự sát còn hơn (-1.0). AI sẽ dồn ép chiếu mate!
-        return 0.9
+        # Trách hòa tuyệt đối: Trả về 5.0 để tạo ra Q-value cực âm ở nút cha (-4.95). 
+        # Thậm chí tệ hơn cả bị chiếu bí (v=-1.0). 
+        # Bắt AI thà tự vứt quân mình, thua luôn, chứ không được phép hòa.
+        return 5.0
     return -1.0 
 
 def apply_endgame_heuristic(b, v):
@@ -118,8 +116,12 @@ def search_mcts(board, net, device, num_simulations=100):
             b.push(action)
             node = child
             
-        if b.is_game_over():
-            v = get_terminal_value(b)
+        is_draw_claimable = b.can_claim_draw() or b.is_repetition(2)
+        if b.is_game_over() or is_draw_claimable:
+            if is_draw_claimable and not b.is_game_over():
+                v = 5.0 # Bị phạt 5.0 nếu lặp nước (thậm chí lặp 2 lần) hoặc luật 50 nước
+            else:
+                v = get_terminal_value(b)
             for n in reversed(path):
                 v = -v * 0.99  # Discount factor: ưu tiên Checkmate sớm (v > 0) và né Checkmate muộn
                 n.backprop(v)
@@ -148,7 +150,7 @@ def search_mcts(board, net, device, num_simulations=100):
         is_draw = False
         if board.is_game_over() and board.result() == '1/2-1/2':
             is_draw = True
-        elif board.can_claim_draw():
+        elif board.can_claim_draw() or board.is_repetition(2) or board.halfmove_clock >= 100:
             is_draw = True
             
         if not is_draw:
@@ -177,5 +179,17 @@ def search_mcts(board, net, device, num_simulations=100):
     if best_move is None:
         best_move = candidate_moves[0]["action"]
 
-    top_moves_res = [{"uci": c["uci"], "prob": c["prob"]} for c in candidate_moves[:5]]
+    # Để giao diện Web hiểu được AI đã CỐ TÌNH chọn một nước % thấp hơn nhằm tránh hòa,
+    # chúng ta sẽ lọc riêng nước đã chọn lên top đầu của list hiển thị.
+    top_moves_res = []
+    
+    # Đưa best_move lên vị trí số 1 (100% hiển thị trực quan cho người dùng thấy engine quyết định lấy nước này)
+    best_cand = next((c for c in candidate_moves if c["action"] == best_move), candidate_moves[0])
+    top_moves_res.append({"uci": best_cand["uci"], "prob": best_cand["prob"]})
+    
+    # Đưa các nước còn lại vào list
+    for c in candidate_moves:
+        if c["action"] != best_move and len(top_moves_res) < 5:
+            top_moves_res.append({"uci": c["uci"], "prob": c["prob"]})
+            
     return best_move.uci(), root_value, top_moves_res

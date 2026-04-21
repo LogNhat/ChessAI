@@ -48,6 +48,8 @@ def _load_model(path: str):
 
 # ─── Pretty display names ────────────────────────────────────────────────────
 _DISPLAY = {
+    'rl_latest_4':         'RL Latest 4 (Self-Play)',
+    'rl_latest_3':         'RL Latest 3 (Self-Play)',
     'rl_latest':           'RL Latest (Self-Play)',
     'best_model':          'V1 Best  (Plain ResNet)',
     'finetuned_best':      'Finetuned Best  (SE-ResNet ep4)',
@@ -98,7 +100,11 @@ for fname in pth_files:
         print(f"[AI] SKIP '{fname}': {e}")
 
 # Fallback: make sure there's always a default
-if 'rl_latest' in MODELS:
+if 'rl_latest_4' in MODELS:
+    DEFAULT_MODEL = 'rl_latest_4'
+elif 'rl_latest_3' in MODELS:
+    DEFAULT_MODEL = 'rl_latest_3'
+elif 'rl_latest' in MODELS:
     DEFAULT_MODEL = 'rl_latest'
 elif 'best_model' in MODELS:
     DEFAULT_MODEL = 'best_model'
@@ -119,6 +125,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # ─── Schemas ─────────────────────────────────────────────────────────────────
 class MoveRequest(BaseModel):
     fen:        str
+    move_history: Optional[list] = []
     difficulty: Optional[int] = 3
     model:      Optional[str] = DEFAULT_MODEL
 
@@ -199,9 +206,14 @@ async def root():
 @app.post("/api/move", response_model=MoveResponse)
 async def make_ai_move(req: MoveRequest):
     try:
-        board = chess.Board(req.fen)
+        if req.move_history:
+            board = chess.Board()
+            for m in req.move_history:
+                board.push_san(m)
+        else:
+            board = chess.Board(req.fen)
     except Exception:
-        raise HTTPException(400, "FEN không hợp lệ")
+        raise HTTPException(400, "FEN/Lịch sử không hợp lệ")
 
     if board.is_game_over():
         return MoveResponse(move="", fen=board.fen(), is_game_over=True,

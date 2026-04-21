@@ -31,7 +31,7 @@ fi
 # -----------------------------------------------------------------------
 
 echo ""
-echo "  Model   : checkpoints/best_model.pth"
+echo "  Models  : Auto-loading from checkpoints/"
 echo "  Port    : http://localhost:$PORT"
 echo "  Ctrl+C để dừng server"
 echo ""

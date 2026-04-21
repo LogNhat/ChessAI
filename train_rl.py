@@ -40,7 +40,7 @@ class MCTSNode:
     def is_leaf(self):
         return len(self.children) == 0
 
-    def select_child(self, c_puct=1.5):
+    def select_child(self, c_puct=2.5):
         best_uct = -float('inf')
         best_child = None
         best_action = None
@@ -60,7 +60,7 @@ class MCTSNode:
         self.W += value
         self.Q = self.W / self.N
 
-def apply_dirichlet_noise(node, alpha=0.3, epsilon=0.25):
+def apply_dirichlet_noise(node, alpha=0.5, epsilon=0.3):
     """Bơm nhiễu Dirichlet để khuyến khích khám phá nước đi mới ở nút mốc gốc"""
     actions = list(node.children.keys())
     if not actions: return
@@ -72,7 +72,7 @@ def get_terminal_value(board):
     """Quy định Reward cốt lõi: Phạt cực nặng khi hòa trong MCTS."""
     res = board.result()
     if res == '1/2-1/2':
-        return 0.9  # Ở cuối MCTS, trả về 0.9 để nút cha (người đi nước đó) nhận -0.99
+        return 5.0
     # Người đến lượt mắc kẹt (bị chiếu bí) => Họ thua => Value = -1.
     return -1.0 
 
@@ -126,11 +126,15 @@ class VectorSelfPlay:
                     node = child
                 
                 # Tại điểm lá
-                if b.is_game_over():
-                    val = get_terminal_value(b)
+                is_draw_claimable = b.can_claim_draw() or b.is_repetition(2)
+                if b.is_game_over() or is_draw_claimable:
+                    if is_draw_claimable and not b.is_game_over():
+                        val = 5.0
+                    else:
+                        val = get_terminal_value(b)
                     # Backprop ngay lập tức
                     for n in reversed(path):
-                        val = -val # Đảo value từ góc nhìn đối thủ
+                        val = -val * 0.99 # Đảo value từ góc nhìn đối thủ
                         n.backprop(val)
                 else:
                     leaf_boards.append(b)
@@ -156,7 +160,7 @@ class VectorSelfPlay:
                 # backprop
                 val = values[k]
                 for n in reversed(search_paths[k]):
-                    val = -val
+                    val = -val * 0.99
                     n.backprop(val)
                     
         # 3. Chọn nước đi
@@ -182,8 +186,8 @@ class VectorSelfPlay:
                     visits.append(c.N)
                     pi[MOVE_TO_INDEX[a.uci()]] = c.N / total_n
                 
-                # Khám phá vài nước đầu, sau đó đánh tối ưu
-                if len(self.histories[i]) < 60:
+                # Khám phá ngẫu nhiên mở rộng thời lượng đầu game để tìm lối nhánh mới
+                if len(self.histories[i]) < 120:
                     action = random.choices(actions, weights=visits, k=1)[0]
                 else:
                     action = actions[np.argmax(visits)]
@@ -216,7 +220,7 @@ def run_rl_loop():
     print(f"[RL] Khởi tạo hệ thống RL - Draw = Loss trên {device}")
     
     model = AlphaZeroNetV1(10, 192).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-5, weight_decay=1e-4)
     
     rl_ckpt = 'checkpoints/rl_latest.pth'
     base_ckpt = 'checkpoints/v1_finetuned_best.pth'
@@ -246,9 +250,9 @@ def run_rl_loop():
     # Ở server M40, chúng ta đánh 256 ván cùng lúc. (GPU 24GB thừa sức ôm batch size 256)
     # CPU xử lý 256 cây đồng thời trong 1 thread rất nhẹ do không nghẽn tree search python.
     NUM_PARALLEL_GAMES = 256
-    SIMULATIONS_PER_MOVE = 80
+    SIMULATIONS_PER_MOVE = 200
     TRAIN_BATCH_SIZE = 4096
-    GAMES_BEFORE_TRAIN = 4000 # Cứ thu thập khoảng 4000 nước đi (~50-80 ván) thì Train 1 lần.
+    GAMES_BEFORE_TRAIN = 2000 # Cứ thu thập khoảng 2000 nước đi thì Train 1 lần (dữ liệu chất lượng hơn).
     
     env = VectorSelfPlay(num_games=NUM_PARALLEL_GAMES)
     
@@ -291,51 +295,57 @@ def run_rl_loop():
         model.train()
         print(f"[RL Train] Tổng Buffer: {len(replay_buffer)}. Bắt đầu Cập nhật...")
         
-        # Lấy ngẫu nhiên vài nghìn mẫu từ Buffer để đánh 1 Epoch PPO-style
+        # Lấy ngẫu nhiên vài nghìn mẫu từ Buffer để đánh nhiều Epoch PPO-style
         train_samples = random.sample(replay_buffer, min(len(replay_buffer), TRAIN_BATCH_SIZE * 5))
         
-        # Shuffle
-        random.shuffle(train_samples)
-        batches = [train_samples[i:i+TRAIN_BATCH_SIZE] for i in range(0, len(train_samples), TRAIN_BATCH_SIZE)]
-        
         total_p = 0; total_v = 0; total_l = 0
-        for batch in batches:
-            states = torch.tensor(np.array([x[0] for x in batch]), dtype=torch.float32).to(device)
-            pi_ts  = torch.tensor(np.array([x[1] for x in batch]), dtype=torch.float32).to(device)
-            z_ts   = torch.tensor(np.array([x[2] for x in batch]), dtype=torch.float32).to(device)
+        num_batches_processed = 0
+        
+        for epoch in range(3):
+            random.shuffle(train_samples)
+            batches = [train_samples[i:i+TRAIN_BATCH_SIZE] for i in range(0, len(train_samples), TRAIN_BATCH_SIZE)]
             
-            p_logits, v_out = model(states)
-            v_out = v_out.squeeze(1)
-            
-            # Policy loss (CrossEntropy against soft target pi)
-            loss_p = -(pi_ts * F.log_softmax(p_logits, dim=1)).sum(dim=1).mean()
-            # Value loss
-            loss_v = F.mse_loss(v_out, z_ts)
-            
-            loss = loss_p + loss_v
-            
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            
-            total_p += loss_p.item()
-            total_v += loss_v.item()
-            total_l += loss.item()
-            
-        print(f"  => RL Cập nhật xong: Loss {total_l/len(batches):.4f} (P={total_p/len(batches):.4f}, V={total_v/len(batches):.4f})")
+            for batch in batches:
+                states = torch.tensor(np.array([x[0] for x in batch]), dtype=torch.float32).to(device)
+                pi_ts  = torch.tensor(np.array([x[1] for x in batch]), dtype=torch.float32).to(device)
+                z_ts   = torch.tensor(np.array([x[2] for x in batch]), dtype=torch.float32).to(device)
+                
+                p_logits, v_out = model(states)
+                v_out = v_out.squeeze(1)
+                
+                # Policy loss (CrossEntropy against soft target pi)
+                loss_p = -(pi_ts * F.log_softmax(p_logits, dim=1)).sum(dim=1).mean()
+                # Value loss
+                loss_v = F.mse_loss(v_out, z_ts)
+                
+                loss = loss_p + loss_v
+                
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                
+                total_p += loss_p.item()
+                total_v += loss_v.item()
+                total_l += loss.item()
+                num_batches_processed += 1
+                
+        avg_l = total_l/num_batches_processed
+        avg_p = total_p/num_batches_processed
+        avg_v = total_v/num_batches_processed
+        print(f"  => RL Cập nhật (3 epoch): Loss {avg_l:.4f} (P={avg_p:.4f}, V={avg_v:.4f})")
         
         # Ghi log Tensorboard
-        writer.add_scalar('RL_Loss/Total', total_l/len(batches), iteration)
-        writer.add_scalar('RL_Loss/Policy', total_p/len(batches), iteration)
-        writer.add_scalar('RL_Loss/Value', total_v/len(batches), iteration)
+        writer.add_scalar('RL_Loss/Total', avg_l, iteration)
+        writer.add_scalar('RL_Loss/Policy', avg_p, iteration)
+        writer.add_scalar('RL_Loss/Value', avg_v, iteration)
         
         # Liên tục lưu Checkpoint mới để Worker đợt sau có Trực giác mới
         torch.save({
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'iteration': iteration,
-            'rl_loss': total_l/len(batches),
+            'rl_loss': avg_l,
         }, 'checkpoints/rl_latest.pth')
         
         print("[RL] Bắt đầu đồng bộ cho vòng đánh tự kỷ tiếp theo!")
