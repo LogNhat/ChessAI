@@ -286,16 +286,16 @@ def run_rl_loop():
     writer = SummaryWriter('runs/chess_rl')
     
     start_time = time.time()
-    MAX_TIME = 12 * 3600  # 12 tiếng
+    MAX_TIME = 4 * 3600  # 4 tiếng
     
     while True:
         elapsed = time.time() - start_time
         if elapsed > MAX_TIME:
-            print("[RL] ⏱️ Đã hết 12 tiếng Train. Dừng hệ thống an toàn!")
+            print("[RL] ⏱️ Đã hết 4 tiếng Train tối đa phục vụ nước rút. Dừng hệ thống an toàn!")
             break
             
         iteration += 1
-        print(f"\n[RL Iteration {iteration} | {elapsed/3600:.1f}/12.0h] Bắt nạt AI tự đánh với chính mình...")
+        print(f"\n[RL Iteration {iteration} | {elapsed/3600:.2f}/4.0h] Bắt nạt AI tự đánh với chính mình...")
         model.eval()
         
         new_data = []
