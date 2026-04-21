@@ -106,23 +106,25 @@ class VectorSelfPlay:
 
         # 2. Chạy Simulations
         for _ in range(simulations):
-            leaf_boards = []
+            leaf_tensors = []
+            leaf_infos = [] # (board_idx, moves_taken, list(b.legal_moves))
             search_paths = []
-            eval_indices = []
 
             for i in range(self.num_games):
                 if self.boards[i].is_game_over(): 
                     continue
                 
-                b = self.boards[i].copy()
+                b = self.boards[i]
                 node = self.roots[i]
                 path = [node]
+                moves_taken = []
                 
                 # Duyệt cây
                 while not node.is_leaf():
                     action, child = node.select_child()
                     path.append(child)
                     b.push(action)
+                    moves_taken.append(action)
                     node = child
                 
                 # Tại điểm lá
@@ -137,25 +139,39 @@ class VectorSelfPlay:
                         val = -val * 0.99 # Đảo value từ góc nhìn đối thủ
                         n.backprop(val)
                 else:
-                    leaf_boards.append(b)
+                    leaf_tensors.append(self.encoder.board_to_tensor(b))
+                    # Lưu lại list moves để lát nữa expand còn xài checkmate-1
+                    leaf_infos.append((i, moves_taken.copy(), list(b.legal_moves)))
                     search_paths.append(path)
-                    eval_indices.append(i)
                     
-            if not leaf_boards:
+                # Hoàn trả board về gốc để không bị sai state cho vòng lặp tới!
+                for _ in moves_taken:
+                    b.pop()
+                    
+            if not leaf_tensors:
                 break
                 
-            # Batch Inference (Điểm sức mạnh GPU)
-            tensors = [self.encoder.board_to_tensor(b) for b in leaf_boards]
-            batch_t_in = torch.tensor(np.array(tensors), dtype=torch.float32).to(device)
+            # Batch Inference liền mạch
+            batch_t_in = torch.tensor(np.array(leaf_tensors), dtype=torch.float32).to(device)
             with torch.no_grad():
                 logits, values = model(batch_t_in)
                 probs = F.softmax(logits, dim=1).cpu().numpy()
                 values = values.squeeze(1).cpu().numpy()
                 
             # Expand & Backprop
-            for k, b in enumerate(leaf_boards):
+            for k, (board_idx, moves_taken, legal_moves) in enumerate(leaf_infos):
+                b = self.boards[board_idx]
+                
+                # Tái thiết lập board tạm thời để expand
+                for action in moves_taken:
+                    b.push(action)
+                    
                 node = search_paths[k][-1]
-                node.expand(list(b.legal_moves), probs[k], b)
+                node.expand(legal_moves, probs[k], b)
+                
+                # Hoàn trả board
+                for _ in moves_taken:
+                    b.pop()
                 
                 # backprop
                 val = values[k]
@@ -217,6 +233,8 @@ class VectorSelfPlay:
 # ─── Vòng lặp huấn luyện Chính (Manager) ─────────────────────────────────────
 def run_rl_loop():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if device.type == 'cuda':
+        torch.backends.cudnn.benchmark = True # Tối ưu hóa Static Graph Convolutions cho GPU M40 Maxwell
     print(f"[RL] Khởi tạo hệ thống RL - Draw = Loss trên {device}")
     
     model = AlphaZeroNetV1(10, 192).to(device)
