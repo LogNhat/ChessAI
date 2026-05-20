@@ -48,25 +48,9 @@ def _load_model(path: str):
 
 # ─── Pretty display names ────────────────────────────────────────────────────
 _DISPLAY = {
-    'rl_latest_4':         'RL Latest 4 (Self-Play)',
-    'rl_latest_3':         'RL Latest 3 (Self-Play)',
-    'rl_latest':           'RL Latest (Self-Play)',
     'best_model':          'V1 Best  (Plain ResNet)',
-    'finetuned_best':      'Finetuned Best  (SE-ResNet ep4)',
     'model_ep1_batch2000': 'Pretrain EP1-B2000',
-    'model_ep1_batch4000': 'Pretrain EP1-B4000',
-    'model_ep1':           'SE-ResNet EP1',
-    'model_ep2_batch2000': 'Pretrain EP2-B2000',
-    'model_ep2':           'SE-ResNet EP2',
-    'model_ep3':           'SE-ResNet EP3',
-    'model_ep4':           'SE-ResNet EP4',
-    'model_ep5':           'SE-ResNet EP5',
-    'v1_finetuned_best':   'V1 Finetuned Best',
-    'v1_finetuned_ep1':    'V1 Finetuned EP1',
-    'v1_finetuned_ep2':    'V1 Finetuned EP2',
-    'v1_finetuned_ep3':    'V1 Finetuned EP3',
-    'v1_finetuned_ep4':    'V1 Finetuned EP4',
-    'v1_finetuned_ep5':    'V1 Finetuned EP5'
+    'model_ep5':           'SE-ResNet EP5'
 }
 
 # ─── Load all checkpoints ─────────────────────────────────────────────────────
