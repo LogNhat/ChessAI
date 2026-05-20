@@ -401,19 +401,34 @@ async def make_move(req: ChessMoveRequest = Body(...)):
         if board.is_game_over():
             raise HTTPException(status_code=400, detail="Cannot apply player move; the game is already over.")
         try:
-            # We obtain the SAN notation BEFORE pushing
-            temp_move = None
+            # First, parse the move to a valid chess.Move object BEFORE pushing it.
+            # This allows us to generate both SAN and UCI formats correctly in the current state.
+            move = None
+            
+            # Try parsing as UCI
             try:
-                temp_move = chess.Move.from_uci(req.player_move)
-                if temp_move in board.legal_moves:
-                    player_move_san = board.san(temp_move)
+                move = chess.Move.from_uci(req.player_move)
+                if move not in board.legal_moves:
+                    move = None
             except Exception:
                 pass
+                
+            # If not UCI, try parsing as SAN
+            if move is None:
+                try:
+                    move = board.parse_san(req.player_move)
+                except Exception:
+                    pass
             
-            pushed_move = push_move_robust(board, req.player_move)
-            player_move_uci = pushed_move.uci()
-            if not player_move_san:
-                player_move_san = board.san(pushed_move) if pushed_move else req.player_move
+            if move is None or move not in board.legal_moves:
+                raise ValueError(f"Move '{req.player_move}' is invalid or illegal in this position.")
+                
+            # Record SAN and UCI formats in the state prior to execution
+            player_move_san = board.san(move)
+            player_move_uci = move.uci()
+            
+            # Push the move onto the board
+            board.push(move)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
