@@ -10,24 +10,24 @@ from model.alphazero_net_v1 import AlphaZeroNetV1
 
 def train(data_dir='dataset/train_top_6m', epochs=5, batch_size=4096, num_workers=4, limit_positions=6_000_000):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Bắt đầu True Finetuning trên thiết bị: {device} (Tesla M40 Optimized)")
-    print(f"Dữ liệu: {data_dir} ({limit_positions} positions limit)")
+    print(f"Starting True Finetuning on device: {device} (Tesla M40 Optimized)")
+    print(f"Data directory: {data_dir} ({limit_positions} positions limit)")
     print(f"Batch size: {batch_size}, Num Workers: {num_workers}")
     print(f"Total True Finetune Epochs: {epochs}")
     
-    # 1. Khởi tạo Model CHUẨN: AlphaZeroNetV1, 10 blocks, 192 filters
+    # 1. Initialize STANDARD model: AlphaZeroNetV1, 10 blocks, 192 filters
     model = AlphaZeroNetV1(num_blocks=10, num_channels=192).to(device)
     
-    # Checkpoint mạnh nhất để lấy làm gốc
+    # Strongest baseline checkpoint as the starting point
     best_v1_path = 'checkpoints/model_ep2_batch2000.pth'
     
     if not os.path.exists(best_v1_path):
-        print(f"❌ LỖI KHÔNG TÌM THẤY {best_v1_path}. Cần file này để bắt đầu finetuning.")
+        print(f"❌ ERROR: COULD NOT FIND {best_v1_path}. This file is required to start finetuning.")
         return
-
-    # Tải siêu mẫu (super model) ep2_batch2000
+ 
+    # Load super model ep2_batch2000
     checkpoint = torch.load(best_v1_path, map_location=device)
-    # Lấy state_dict gốc (có thể chênh lệch nếu checkpoint lưu cấu trúc khác, nhưng trường hợp này đảm bảo 100% giống nhau)
+    # Load the original state_dict strictly
     model.load_state_dict(checkpoint['model_state_dict'], strict=True)
     
     old_epoch = checkpoint.get('epoch', '?')
@@ -37,11 +37,11 @@ def train(data_dir='dataset/train_top_6m', epochs=5, batch_size=4096, num_worker
     else:
         old_loss_str = str(old_loss)
         
-    print(f"✅ Đã tải thành công 100% trọng số từ: {best_v1_path}")
-    print(f"   (Epoch cũ: {old_epoch}, Loss cũ: {old_loss_str})")
+    print(f"✅ Successfully loaded 100% weights from: {best_v1_path}")
+    print(f"   (Old Epoch: {old_epoch}, Old Loss: {old_loss_str})")
     
-    # Phải reset lại optimizer và scheduler, vì chúng ta đang bắt đầu phase mới
-    # Dùng LR nhỏ: 5e-5 để không phá vỡ liên kết có sẵn
+    # Reset optimizer and scheduler since we are starting a new phase
+    # Use a small learning rate (5e-5) to avoid disruptive weight updates
     optimizer = optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-4)    
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     
@@ -61,10 +61,10 @@ def train(data_dir='dataset/train_top_6m', epochs=5, batch_size=4096, num_worker
     
     best_loss = float('inf')
     ckpt_path = 'checkpoints/v1_finetuned_best.pth'
-
+ 
     for epoch in range(epochs):
         current_lr = scheduler.get_last_lr()[0]
-        print(f"\n=== Bắt đầu V1-Finetune Epoch {epoch+1}/{epochs} (LR = {current_lr:.6f}) ===")
+        print(f"\n=== Starting V1-Finetune Epoch {epoch+1}/{epochs} (LR = {current_lr:.6f}) ===")
         
         model.train()
         total_p_loss = 0.0
@@ -76,7 +76,7 @@ def train(data_dir='dataset/train_top_6m', epochs=5, batch_size=4096, num_worker
         for batch_idx, (tensors, moves, values) in enumerate(dataloader):
             tensors, moves, values = tensors.to(device), moves.to(device), values.to(device)
             
-            # Forward pass (FP32 native - Tốt nhất cho Maxwell M40)
+            # Forward pass (native FP32 - optimal for Maxwell M40)
             policy_logits, value_out = model(tensors)
             value_out = value_out.squeeze(1) 
             
@@ -97,7 +97,7 @@ def train(data_dir='dataset/train_top_6m', epochs=5, batch_size=4096, num_worker
             
             # Save periodic backups
             if batch_idx > 0 and batch_idx % 2000 == 0:
-                print(f"Đang lưu Backup Checkpoint tại Batch {batch_idx}...")
+                print(f"Saving Backup Checkpoint at Batch {batch_idx}...")
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -105,20 +105,20 @@ def train(data_dir='dataset/train_top_6m', epochs=5, batch_size=4096, num_worker
                     'scheduler_state_dict': scheduler.state_dict(),
                     'loss': total_loss / (batch_idx + 1),
                 }, f'checkpoints/v1_finetuned_ep{epoch+1}_batch{batch_idx}.pth')
-
+ 
             if batch_idx % 50 == 0:
                 cur_lr_log = scheduler.get_last_lr()[0]
                 print(f"Epoch {epoch+1}/{epochs} | Batch {batch_idx}/{len(dataloader)} | "
                       f"P_Loss: {loss_p.item():.4f} | V_Loss: {loss_v.item():.4f} | "
                       f"Total: {loss.item():.4f} | LR: {cur_lr_log:.2e}")
                 
-        # Cuối epoch
+        # End of epoch
         avg_loss = total_loss / len(dataloader)
         avg_p_loss = total_p_loss / len(dataloader)
         avg_v_loss = total_v_loss / len(dataloader)
         
         epoch_time = time.time() - start_time
-        print(f"--- Đã xong Epoch {epoch+1} trong {epoch_time:.2f}s ---")
+        print(f"--- Finished Epoch {epoch+1} in {epoch_time:.2f}s ---")
         print(f"Avg Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f})")
         
         writer.add_scalar('Loss/Total', avg_loss, epoch)
@@ -131,7 +131,7 @@ def train(data_dir='dataset/train_top_6m', epochs=5, batch_size=4096, num_worker
         # Save best model
         if avg_loss < best_loss:
             best_loss = avg_loss
-            print(f"=> Mức loss tốt nhất ({best_loss:.4f}), lưu vào {ckpt_path}...")
+            print(f"=> New best loss ({best_loss:.4f}), saving to {ckpt_path}...")
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -140,7 +140,7 @@ def train(data_dir='dataset/train_top_6m', epochs=5, batch_size=4096, num_worker
                 'loss': best_loss,
             }, ckpt_path)
             
-        # Luôn lưu checkpoint theo epoch
+        # Always save epoch checkpoints
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
@@ -150,8 +150,8 @@ def train(data_dir='dataset/train_top_6m', epochs=5, batch_size=4096, num_worker
         }, f'checkpoints/v1_finetuned_ep{epoch+1}.pth')
         
     writer.close()
-    print(f"\n🎉 True Finetuning 5 epochs hoàn thành! Checkpoint xuất sắc nhất nằm tại: {ckpt_path}")
-
+    print(f"\n🎉 True Finetuning {epochs} epochs completed! Best checkpoint saved to: {ckpt_path}")
+ 
 if __name__ == "__main__":
     torch.backends.cudnn.benchmark = True
     train(epochs=5, batch_size=4096, num_workers=4, limit_positions=6_000_000)

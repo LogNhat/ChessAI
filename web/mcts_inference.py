@@ -56,14 +56,14 @@ class MCTSNode:
 def get_terminal_value(board):
     res = board.result()
     if res == '1/2-1/2':
-        # Trách hòa tuyệt đối: Trả về 5.0 để tạo ra Q-value cực âm ở nút cha (-4.95). 
-        # Thậm chí tệ hơn cả bị chiếu bí (v=-1.0). 
-        # Bắt AI thà tự vứt quân mình, thua luôn, chứ không được phép hòa.
+        # Absolute draw avoidance: Return 5.0 to generate a highly negative Q-value at the parent node (-4.95). 
+        # This is even worse than getting checkmated (v = -1.0). 
+        # Forces the AI to rather lose its pieces and lose the game than draw.
         return 5.0
     return -1.0 
 
 def apply_endgame_heuristic(b, v):
-    # Nếu còn <= 5 quân cờ và một bên đang thắng thế rõ ràng, MCTS hay bị phẳng gía trị dẫn tới đi lòng vòng
+    # If <= 5 pieces remain and one side has a clear advantage, MCTS values can flatten, causing the engine to shuffle around
     if len(b.piece_map()) <= 5 and abs(v) > 0.5:
         if v < -0.5:
             loser = b.turn
@@ -77,12 +77,12 @@ def apply_endgame_heuristic(b, v):
         l_king = b.king(loser)
         w_king = b.king(winner)
         if l_king is not None and w_king is not None:
-            # Ưu tiên dồn vua thua vào góc tường
+            # Encourage pushing the losing king to the corner
             r_l = chess.square_rank(l_king)
             f_l = chess.square_file(l_king)
             edge = max(r_l, 7 - r_l) + max(f_l, 7 - f_l)
             
-            # Ưu tiên vua thắng tiến lại gần vua thua
+            # Encourage the winning king to move closer to the losing king
             r_w = chess.square_rank(w_king)
             f_w = chess.square_file(w_king)
             dist = max(abs(r_l - r_w), abs(f_l - f_w))
@@ -119,11 +119,11 @@ def search_mcts(board, net, device, num_simulations=100):
         is_draw_claimable = b.can_claim_draw() or b.is_repetition(2)
         if b.is_game_over() or is_draw_claimable:
             if is_draw_claimable and not b.is_game_over():
-                v = 5.0 # Bị phạt 5.0 nếu lặp nước (thậm chí lặp 2 lần) hoặc luật 50 nước
+                v = 5.0 # Penalized 5.0 if draw by repetition (even 2-fold repetition) or 50-move rule
             else:
                 v = get_terminal_value(b)
             for n in reversed(path):
-                v = -v * 0.99  # Discount factor: ưu tiên Checkmate sớm (v > 0) và né Checkmate muộn
+                v = -v * 0.99  # Discount factor: favors earlier checkmates (v > 0) and avoids delayed checkmate
                 n.backprop(v)
             continue
             
@@ -135,7 +135,7 @@ def search_mcts(board, net, device, num_simulations=100):
             
         node.expand(list(b.legal_moves), probs, b)
         for n in reversed(path):
-            v = -v * 0.99  # Suy giảm tương tự cho Value network
+            v = -v * 0.99  # Similarly discounted decay for the Value network
             n.backprop(v)
             
     total_N = sum(c.N for c in root.children.values())
@@ -143,7 +143,7 @@ def search_mcts(board, net, device, num_simulations=100):
         return list(board.legal_moves)[0].uci(), root_value, []
 
     # --- Draw Avoider Heuristic ---
-    # Lọc ra các nước đi an toàn không dẫn đến hòa ngay lập tức (Stalemate, 3-Fold, 50-move rule)
+    # Filter out safe moves that do not lead to an immediate draw (Stalemate, 3-fold repetition, 50-move rule)
     safe_actions = set()
     for m in board.legal_moves:
         board.push(m)
@@ -168,26 +168,26 @@ def search_mcts(board, net, device, num_simulations=100):
         
     candidate_moves.sort(key=lambda x: x["prob"], reverse=True)
     
-    # Ưu tiên chọn nước có prob cao nhất NHƯNG phải an toàn (không bị hòa)
+    # Select the move with the highest probability, BUT it must be safe (no immediate draw)
     best_move = None
     for cand in candidate_moves:
         if cand["action"] in safe_actions:
             best_move = cand["action"]
             break
             
-    # Nếu tất cả các nước đều dẫn đến hòa, đành chọn nước mặc định tốt nhất
+    # If all moves lead to a draw, fall back to the highest probability move
     if best_move is None:
         best_move = candidate_moves[0]["action"]
 
-    # Để giao diện Web hiểu được AI đã CỐ TÌNH chọn một nước % thấp hơn nhằm tránh hòa,
-    # chúng ta sẽ lọc riêng nước đã chọn lên top đầu của list hiển thị.
+    # To let the Web UI know the AI INTENTIONALLY chose a lower probability move to avoid drawing,
+    # we bubble the selected move to the top of the displayed candidate list.
     top_moves_res = []
     
-    # Đưa best_move lên vị trí số 1 (100% hiển thị trực quan cho người dùng thấy engine quyết định lấy nước này)
+    # Put the best_move at position 1 (visual cue for the user that the engine decided to pick this move)
     best_cand = next((c for c in candidate_moves if c["action"] == best_move), candidate_moves[0])
     top_moves_res.append({"uci": best_cand["uci"], "prob": best_cand["prob"]})
     
-    # Đưa các nước còn lại vào list
+    # Append the remaining candidate moves
     for c in candidate_moves:
         if c["action"] != best_move and len(top_moves_res) < 5:
             top_moves_res.append({"uci": c["uci"], "prob": c["prob"]})

@@ -5,10 +5,10 @@ import torch.nn.functional as F
 
 class SEBlock(nn.Module):
     """
-    Squeeze-Excitation Block như trong Leela Chess Zero (LCZero).
-    Cho phép mạng học cách trọng số hóa từng channel dựa trên nội dung toàn bộ bàn cờ.
+    Squeeze-Excitation Block as in Leela Chess Zero (LCZero).
+    Allows the network to learn how to weight each channel based on the global board context.
     
-    Kiến trúc: GlobalAvgPool → FC(channels → channels//se_ratio) → ReLU
+    Architecture: GlobalAvgPool → FC(channels → channels//se_ratio) → ReLU
                 → FC(channels//se_ratio → channels*2) → split → Sigmoid scale + Linear bias
     """
     def __init__(self, channels: int, se_ratio: int = 4):
@@ -36,8 +36,8 @@ class SEBlock(nn.Module):
 
 class ResBlock(nn.Module):
     """
-    Pre-activation Residual Block tích hợp SE Attention.
-    Kiến trúc: Conv → BN → ReLU → Conv → BN → SE → Residual → ReLU
+    Pre-activation Residual Block with integrated SE Attention.
+    Architecture: Conv → BN → ReLU → Conv → BN → SE → Residual → ReLU
     """
     def __init__(self, channels: int, se_ratio: int = 4):
         super().__init__()
@@ -51,7 +51,7 @@ class ResBlock(nn.Module):
         residual = x
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
-        out = self.se(out)        # Apply SE attention trước khi cộng residual
+        out = self.se(out)        # Apply SE attention before adding residual
         out = out + residual
         out = F.relu(out)
         return out
@@ -66,7 +66,7 @@ class AlphaZeroNet(nn.Module):
     - Policy Head: 4-channel conv + hidden FC → 4272 moves
     - Value Head: 1-channel conv → FC(256) → FC(128) → tanh scalar
     
-    Total params: ~27M (vs ~13M trước đây)
+    Total params: ~27M (vs ~13M previously)
     Estimated VRAM with batch_size=4096: ~7-8 GB (safe for 24GB M40)
     """
     def __init__(self, num_blocks: int = 12, num_channels: int = 192,
@@ -87,7 +87,7 @@ class AlphaZeroNet(nn.Module):
         ])
 
         # ── Policy Head ───────────────────────────────────────────────────
-        # 4-channel conv để nắm bắt nhiều đặc trưng không gian hơn
+        # 4-channel conv to capture more spatial features
         policy_mid = 4 * 8 * 8   # 256
         self.policy_conv = nn.Conv2d(num_channels, 4, kernel_size=1, bias=False)
         self.policy_bn   = nn.BatchNorm2d(4)
@@ -107,8 +107,8 @@ class AlphaZeroNet(nn.Module):
         Args:
             x: (batch_size, 18, 8, 8) board state tensor
         Returns:
-            policy_logits: (batch_size, 4272) — raw logits (không softmax)
-            value:         (batch_size, 1)    — giá trị trong [-1, 1]
+            policy_logits: (batch_size, 4272) — raw logits (no softmax)
+            value:         (batch_size, 1)    — value in [-1, 1]
         """
         # Stem
         x = self.initial_conv(x)
@@ -148,6 +148,6 @@ if __name__ == "__main__":
     params = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {params:,}")
 
-    # Ước tính VRAM
+    # Estimate VRAM
     param_mb = params * 4 / (1024 ** 2)
     print(f"Param memory (FP32): {param_mb:.1f} MB")

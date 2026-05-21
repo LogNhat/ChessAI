@@ -1,6 +1,6 @@
 """
-AlphaZeroNet V1 — kiến trúc gốc khớp với best_model.pth (20M moves).
-- 10 ResBlocks (không có SE), 192 channels
+AlphaZeroNet V1 — original architecture matching best_model.pth (20M moves).
+- 10 ResBlocks (no SE), 192 channels
 - Policy Head: 2-channel conv → FC(128) → 4272
 - Value Head: 1-channel conv → FC(256) → FC(1) → tanh
 """
@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 
 class ResBlockV1(nn.Module):
-    """Plain residual block (không SE), khớp với best_model.pth."""
+    """Plain residual block (no SE), matches best_model.pth."""
     def __init__(self, channels: int):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
@@ -28,8 +28,8 @@ class ResBlockV1(nn.Module):
 
 class AlphaZeroNetV1(nn.Module):
     """
-    Kiến trúc khớp 100% với best_model.pth (trained 20M moves).
-    ResNet 10 blocks, 192 channels — KHÔNG có SE attention.
+    Architecture matches 100% with best_model.pth (trained 20M moves).
+    ResNet 10 blocks, 192 channels — NO SE attention.
     Policy: 2-ch conv → FC(4272)
     Value : 1-ch conv → FC(256) → FC(1) → tanh
     """
