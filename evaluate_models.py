@@ -15,6 +15,7 @@ import argparse
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+import csv
 
 # Add the parent directory to sys.path to import local modules
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -340,48 +341,32 @@ def load_model(path, device):
     return net, arch_label
 
 
-# ─── Elo Rating & Bradley-Terry Solver ───────────────────────────────────────
+# ─── Elo Rating Solver ───────────────────────────────────────────────────────
 
-def compute_ratings_bt(games, players, iterations=200):
+def compute_elo(games, players, k_factor=32, passes=30):
     """
-    Computes Bradley-Terry maximum likelihood ratings for all players.
-    Draws are handled as 0.5 wins for both.
+    Computes Elo ratings iteratively to ensure stability and convergence.
+    This is extremely stable, regularized, and handles 0% and 100% win rates perfectly.
     """
-    p = {player: 1.0 for player in players}
-    wins = {player: 0.0 for player in players}
-    opponents = {player: [] for player in players}
+    ratings = {player: 1500.0 for player in players}
     
-    for p1, p2, outcome in games:
-        # outcome is score for p1 (1.0 win, 0.5 draw, 0.0 loss)
-        wins[p1] += outcome
-        wins[p2] += (1.0 - outcome)
-        opponents[p1].append(p2)
-        opponents[p2].append(p1)
+    # We do multiple passes to let the ratings converge
+    for pass_idx in range(passes):
+        # Decay K-factor over passes to converge smoothly
+        k = k_factor / (1.0 + 0.1 * pass_idx)
+        # Shuffle games in each pass to ensure no ordering bias
+        shuffled_games = list(games)
+        random.shuffle(shuffled_games)
         
-    # Run Minorization-Maximization algorithm for BT model
-    for _ in range(iterations):
-        new_p = {}
-        for player in players:
-            denom = 0.0
-            for opp in opponents[player]:
-                denom += 1.0 / (p[player] + p[opp])
-            if denom > 0:
-                new_p[player] = wins[player] / denom
-            else:
-                new_p[player] = p[player]
-                
-        # Normalize to prevent overflow/underflow
-        sum_p = sum(new_p.values())
-        if sum_p > 0:
-            p = {player: val / sum_p for player, val in new_p.items()}
+        for p1, p2, outcome in shuffled_games:
+            r1 = ratings[p1]
+            r2 = ratings[p2]
             
-    # Convert to standard Elo scale (base 10, offset 1500)
-    ratings = {}
-    for player in players:
-        if p[player] > 0:
-            ratings[player] = 400.0 * math.log10(p[player])
-        else:
-            ratings[player] = -1000.0
+            exp1 = 1.0 / (1.0 + 10.0 ** ((r2 - r1) / 400.0))
+            exp2 = 1.0 / (1.0 + 10.0 ** ((r1 - r2) / 400.0))
+            
+            ratings[p1] += k * (outcome - exp1)
+            ratings[p2] += k * ((1.0 - outcome) - exp2)
             
     # Shift so that the average Elo is exactly 1500
     avg_rating = sum(ratings.values()) / len(players)
@@ -553,7 +538,7 @@ def main():
                 total_moves += moves
                 
                 # Record result
-                results.append((w_name, b_name, result))
+                results.append((w_name, b_name, result, term, moves))
                 
                 # Update tally
                 if result == "1-0":
@@ -591,10 +576,10 @@ def main():
     logger.info(f"Avg Moves per Game: {total_moves/total_games:.1f} moves")
     logger.info("=========================================================")
     
-    # 4. Solve Bradley-Terry Ratings (Elo Scale)
+    # 4. Solve Elo Ratings
     # Convert results list to numerical outcomes (from perspective of m1)
     numerical_games = []
-    for w_name, b_name, result in results:
+    for w_name, b_name, result, term, moves in results:
         if result == "1-0":
             numerical_games.append((w_name, b_name, 1.0))
         elif result == "0-1":
@@ -602,13 +587,13 @@ def main():
         else:
             numerical_games.append((w_name, b_name, 0.5))
             
-    elo_ratings = compute_ratings_bt(numerical_games, model_names)
+    elo_ratings = compute_elo(numerical_games, model_names)
     
     # Sort leaderboard by rating
     leaderboard = sorted(model_names, key=lambda x: elo_ratings[x], reverse=True)
     
     # 5. Generate beautiful leaderboard & logs
-    logger.info("RANKING LEADERBOARD (Bradley-Terry Elo equivalent):")
+    logger.info("RANKING LEADERBOARD (Iterative Elo ratings):")
     logger.info(f"{'Rank':<5} | {'Model Name':<25} | {'Elo':<6} | {'W / D / L':<12} | {'Points':<6} | {'Win Rate':<8}")
     logger.info("-" * 75)
     
@@ -646,7 +631,40 @@ def main():
         logger.info(row_str)
         
     logger.info("=========================================================")
-    logger.info(f"Detailed logs saved to: {LOG_FILE}")
+    
+    # 7. Log results into CSV files
+    csv_games_path = os.path.join(ckpt_dir, "tournament_games.csv")
+    csv_leaderboard_path = os.path.join(ckpt_dir, "tournament_leaderboard.csv")
+    
+    try:
+        with open(csv_games_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Game_No", "White_Model", "Black_Model", "Result", "Termination", "Moves"])
+            for idx, (w_name, b_name, result, term, moves) in enumerate(results, 1):
+                writer.writerow([idx, w_name, b_name, result, term, moves])
+        logger.info(f"Successfully logged game-by-game results to: {csv_games_path}")
+    except Exception as e:
+        logger.error(f"Failed to log games to CSV: {e}")
+        
+    try:
+        with open(csv_leaderboard_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Rank", "Model_Name", "Elo", "Wins", "Draws", "Losses", "Points", "Win_Rate"])
+            for rank, name in enumerate(leaderboard, 1):
+                w = wins[name]
+                d = draws[name]
+                l = losses[name]
+                pts = w + 0.5 * d
+                tot = w + d + l
+                wr = (pts / tot) * 100 if tot > 0 else 0
+                elo_val = round(elo_ratings[name])
+                writer.writerow([rank, name, elo_val, w, d, l, pts, f"{wr:.1f}%"])
+        logger.info(f"Successfully logged leaderboard rankings to: {csv_leaderboard_path}")
+    except Exception as e:
+        logger.error(f"Failed to log leaderboard to CSV: {e}")
+        
+    logger.info("=========================================================")
+    logger.info(f"Detailed stdout/text logs saved to: {LOG_FILE}")
     logger.info("=========================================================")
 
 
