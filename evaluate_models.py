@@ -395,7 +395,7 @@ def compute_ratings_bt(games, players, iterations=200):
 
 def main():
     parser = argparse.ArgumentParser(description="Run simultaneous tournament evaluation of Chess AlphaZero models")
-    parser.add_argument("--games-per-pair", type=int, default=10,
+    parser.add_argument("--games-per-pair", type=int, default=2,
                         help="Number of games per pair (half as White, half as Black, must be even)")
     parser.add_argument("--simulations", type=int, default=50,
                         help="Number of MCTS simulations per move")
