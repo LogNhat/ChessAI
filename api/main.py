@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from model.alphazero_net_v1 import AlphaZeroNetV1
 from model.alphazero_net import AlphaZeroNet
 from env.encoder import Encoder, MOVE_TO_INDEX, NUM_MOVES
-from web.mcts_inference import search_mcts
+from api.mcts_inference import search_mcts
 
 # ─── Concurrency & Compute Configurations ────────────────────────────────────
 MAX_CONCURRENT_TASKS = int(os.environ.get("CHESS_CONCURRENT_TASKS", 2))
